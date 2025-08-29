@@ -1,0 +1,16 @@
+/* filepath: c:\developer\map_app_ecs\ecs_fe_map app\src\styles.css */
+@import url('https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+@plugin "daisyui";
+
+/* Apply Lexend font globally */
+:root {
+  font-family: 'Lexend', sans-serif;
+}
+
+body {
+  font-family: 'Lexend', sans-serif;
+}
+
+/* Optional: customize theme tokens or add your own components here. */
+/* For example, to tweak colors, you could use @theme in Tailwind v4. */
