@@ -1,4 +1,5 @@
 import type { Branch, FieldEngineer, ServiceRequest } from '../types';
+import { isConnected } from './socketService';
 
 // Use environment variable for API URL with fallback
 const API_URL = import.meta.env.VITE_API_URL || 'https://localhost:7126/api';
@@ -9,7 +10,15 @@ const handleResponse = async (response: Response) => {
     const text = await response.text();
     throw new Error(text || `Error: ${response.status}`);
   }
-  return response.json();
+  
+  // Check if there's actual content before parsing JSON
+  const contentType = response.headers.get('content-type');
+  if (contentType && contentType.includes('application/json')) {
+    const text = await response.text();
+    return text ? JSON.parse(text) : null;
+  }
+  
+  return null; // Return null for empty or non-JSON responses
 };
 
 // API Functions
@@ -64,27 +73,25 @@ export const fetchServiceRequests = async (): Promise<ServiceRequest[]> => {
   }));
 };
 
-export const createServiceRequest = async (branchId: string): Promise<void> => {
-  const response = await fetch(`${API_URL}/ServiceRequests`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      branchId: parseInt(branchId),
-      title: 'New Service Request',
-      description: 'Service required at branch',
-      status: 'pending',
-      priority: 'Medium'
-    })
-  });
-  const created = await handleResponse(response);
-
-  // Immediately auto-assign nearest FE server-side for simplified flow
+export const createServiceRequest = async (data: { branchId: string, branch: Branch }) => {
   try {
-    await fetch(`${API_URL}/ServiceRequests/${created.id || created.Id}/auto-assign`, { method: 'POST' });
-  } catch (err) {
-    console.error('Auto-assign failed:', err);
+    const response = await fetch(`${API_URL}/ServiceRequests`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      // Only send the branchId in the request body
+      body: JSON.stringify({
+        branchId: parseInt(data.branchId)  // Convert string to number since the API expects an integer
+      }),
+    });
+    
+    return await handleResponse(response);
+  } catch (error) {
+    console.error('Error creating service request:', error);
+    throw error;
   }
-};
+}
 
 export const acceptServiceRequest = async (
   serviceRequestId: string, 
@@ -97,4 +104,7 @@ export const acceptServiceRequest = async (
   });
   
   await handleResponse(response);
+
+  // With sockets, we don't need to manually refresh data after operations
+  // The server will broadcast the changes and our socket subscriptions will update the UI
 };

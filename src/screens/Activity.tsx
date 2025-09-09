@@ -1,5 +1,13 @@
 import { useState, useEffect } from 'react';
 import Header from '../header/Header';
+import type { Branch, FieldEngineer, ServiceRequest, OngoingRoute } from '../types';
+import {
+  fetchBranches,
+  fetchFieldEngineers,
+  fetchServiceRequests,
+  createServiceRequest as apiCreateServiceRequest,
+  acceptServiceRequest as apiAcceptServiceRequest
+} from '../services/api';
 
 // Define interfaces for activity data
 interface Activity {
@@ -24,10 +32,66 @@ function ActivityPage() {
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [priorityFilter, setPriorityFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [fieldEngineers, setFieldEngineers] = useState<FieldEngineer[]>([]);
+    const [branches, setBranches] = useState<Branch[]>([]);
+      const [showFieldEngineers, setShowFieldEngineers] = useState<boolean>(true);
+  const [showBranches, setShowBranches] = useState<boolean>(true);
+    const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
   const [dateRange, setDateRange] = useState<{start: string, end: string}>({
     start: new Date(new Date().setDate(new Date().getDate() - 7)).toISOString().slice(0, 10),
     end: new Date().toISOString().slice(0, 10)
   });
+
+
+   // Fetch field engineers from API
+    const fetchFieldEngineersData = async () => {
+      try {
+        const data = await fetchFieldEngineers();
+        setFieldEngineers(data);
+        setLoading(false);
+      } catch (err) {
+        console.error('Error fetching field engineers:', err);
+        setError('Failed to fetch field engineers data.');
+        setLoading(false);
+      }
+    };
+  
+
+    // Service Requests API
+    const fetchServiceRequestsData = async () => {
+      try {
+        const data = await fetchServiceRequests();
+        setServiceRequests(data);
+      } catch (err) {
+        console.error('Error fetching service requests:', err);
+      }
+    };
+
+    const handleCreateServiceRequest = async (branch: Branch) => {
+    if (!branch._id) {
+      console.warn('Branch id missing');
+      return;
+    }
+    try {
+      await apiCreateServiceRequest(branch._id);
+      await fetchServiceRequestsData();
+    } catch (err) {
+      console.error('Error creating service request:', err);
+    }
+  };
+
+   
+
+  const handleAcceptServiceRequest = async (sr: ServiceRequest, fe: FieldEngineer) => {
+    try {
+      await apiAcceptServiceRequest(sr.id, fe.id);
+      await fetchServiceRequestsData();
+      await fetchFieldEngineersData();
+    } catch (err) {
+      console.error('Error accepting service request:', err);
+    }
+  };
+
 
   // Fetch activities from API or generate sample data
   const fetchActivities = async () => {
@@ -375,6 +439,96 @@ function ActivityPage() {
             </div>
           </div>
 
+          {/* cards */}
+              <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+
+                {/* Field engineers card */}
+                <div className="rounded-xl bg-gradient-to-br from-[#c8c87e]/80 to-[#6b6f1d]/60 p-6 shadow-lg backdrop-blur-md border border-white/10 text-white">
+                  <div className="flex flex-col h-full">
+                    {/* Top section with field engineer stats */}
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h1 className="text-5xl font-bold text-yellow-300">{fieldEngineers.length}</h1>
+                        <div className="text-lg mt-1">Field Engineers</div>
+                        <div className="flex items-center mt-2 text-white/90 text-sm gap-2">
+                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                            <path d="M10 8a3 3 0 100-6 3 3 0 000 6zM3.465 14.493a1.23 1.23 0 00.41 1.412A9.957 9.957 0 0010 18c2.31 0 4.438-.784 6.131-2.1.43-.333.604-.903.408-1.41a7.002 7.002 0 00-13.074.003z" />
+                          </svg>
+                          Active Personnel
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-white/90 text-sm">August 18, 2025 | 10:15 AM</div>
+                        <div className="flex flex-col gap-1 mt-2">
+                          <div className="flex items-center gap-1 bg-white/20 px-2 py-1 rounded-lg text-xs">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            28 Available
+                          </div>
+                          <div className="flex items-center gap-1 bg-white/20 px-2 py-1 rounded-lg text-xs">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5V6a3.75 3.75 0 10-7.5 0v4.5m11.356-1.993l1.263 12c.07.665-.45 1.243-1.119 1.243H4.25a1.125 1.125 0 01-1.12-1.243l1.264-12A1.125 1.125 0 015.513 7.5h12.974c.576 0 1.059.435 1.119 1.007zM8.625 10.5a.375.375 0 11-.75 0 .375.375 0 01.75 0zm7.5 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                            </svg>
+                            14 On Assignment
+                          </div>
+                          <div className="flex items-center gap-1 bg-yellow-500/40 px-2 py-1 rounded-lg text-xs">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                            </svg>
+                            7 Urgent Requests
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Branch coverage stats */}
+                    <div className="grid grid-cols-4 gap-2 mt-6">
+                      <div className="text-center">
+                        <div className="text-xs text-white/70">Branches</div>
+                        <div className="text-lg font-medium">{branches.length}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-white/70">ATM Sites</div>
+                        <div className="text-lg font-medium">36</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-white/70">Service Centers</div>
+                        <div className="text-lg font-medium">12</div>
+                      </div>
+                    </div>
+
+                    {/* Branch coverage chart */}
+                    <div className="mt-5 relative h-20">
+                      {/* Coverage bar chart */}
+                      <div className="absolute inset-0 grid grid-cols-4 gap-1">
+                        <div className="flex flex-col justify-end">
+                          <div className="bg-green-500/70 rounded-t-md h-[80%]"></div>
+                        </div>
+
+                        <div className="flex flex-col justify-end">
+                          <div className="bg-yellow-500/70 rounded-t-md h-[90%]"></div>
+                        </div>
+                        <div className="flex flex-col justify-end">
+                          <div className="bg-red-500/70 rounded-t-md h-[40%]"></div>
+                        </div>
+                      </div>
+
+                      {/* Region labels */}
+                      <div className="absolute bottom-0 w-full flex justify-between text-xs text-white/70">
+                        <div>NCR</div>
+                        <div>North Luzon</div>
+                        <div>South Luzon</div>
+                        <div>Visayas & Mindanao</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                
+              </div>
+
           {/* Filters */}
           <div className="p-4 pt-2">
             <div className="bg-[#6b6f1d]/90 backdrop-blur-sm shadow-md rounded-xl p-3">
@@ -467,7 +621,7 @@ function ActivityPage() {
                 <span>{error}</span>
               </div>
             ) : filteredActivities.length === 0 ? (
-              <div className="bg-white/90 backdrop-blur-sm rounded-xl p-8 text-center">
+              <div className=" backdrop-blur-sm rounded-xl p-8 text-center">
                 <div className="text-gray-500 mb-2">
                   {typeFilter || priorityFilter || searchQuery ? 'No activities match your filters' : 'No activities found'}
                 </div>
@@ -484,6 +638,7 @@ function ActivityPage() {
                   </button>
                 )}
               </div>
+              
             ) : (
               <div className="space-y-6">
                 {Object.keys(groupedActivities).map(date => (
@@ -546,6 +701,7 @@ function ActivityPage() {
                 ))}
               </div>
             )}
+            
           </div>
         </div>
       </main>
@@ -682,6 +838,7 @@ function ActivityPage() {
                 PDF
               </button>
             </div>
+            
           </div>
         </div>
       </aside>

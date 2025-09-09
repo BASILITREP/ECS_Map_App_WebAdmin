@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
+
 import Header from '../header/Header';
+import { useNavigate } from 'react-router-dom';
 
 // Define the Field Engineer interface
 interface FieldEngineer {
@@ -70,6 +72,12 @@ function FEPage() {
             // You could add error handling for the form here
         }
     };
+    const navigate = useNavigate();
+    const handleProfileClick = (engineer: FieldEngineer) => {
+        navigate('/profile/${engineer.id}', { 
+            state: { engineerData: engineer }
+        });
+    }
 
     // Fetch data on component mount
     useEffect(() => {
@@ -186,11 +194,11 @@ function FEPage() {
                                     <div className="flex gap-2">
                                         <div className="badge badge-success gap-1">
                                             <div className="w-2 h-2 rounded-full bg-white"></div>
-                                            Active: {getStatusCount('active')}
+                                            Active: {getStatusCount('Active')}
                                         </div>
                                         <div className="badge badge-warning gap-1">
                                             <div className="w-2 h-2 rounded-full bg-white"></div>
-                                            On Assignment: {getStatusCount('on assignment')}
+                                            On Assignment: {getStatusCount('On Assignment')}
                                         </div>
                                         <div className="badge badge-neutral gap-1">
                                             <div className="w-2 h-2 rounded-full bg-white"></div>
@@ -202,127 +210,129 @@ function FEPage() {
                         </div>
                     </div>
 
-                    {/* Field engineers list */}
-                    <div className="p-4 pt-2">
-                        {loading ? (
-                            <div className="flex justify-center py-8">
-                                <span className="loading loading-spinner loading-lg text-primary"></span>
-                            </div>
-                        ) : error ? (
-                            <div className="alert alert-error">
-                                <span>{error}</span>
-                            </div>
-                        ) : filteredEngineers.length === 0 ? (
-                            <div className="bg-white/90 backdrop-blur-sm rounded-xl p-8 text-center">
-                                <div className="text-gray-500 mb-2">
-                                    {searchQuery || statusFilter ? 'No engineers match your filters' : 'No engineers found'}
+          
+
+{/* Field engineers list */}
+<div className="p-4 pt-2">
+    {loading ? (
+        <div className="flex justify-center py-8">
+            <span className="loading loading-spinner loading-lg text-primary"></span>
+        </div>
+    ) : error ? (
+        <div className="alert alert-error">
+            <span>{error}</span>
+        </div>
+    ) : filteredEngineers.length === 0 ? (
+        <div className="bg-white/90 backdrop-blur-sm rounded-xl p-8 text-center">
+            <div className="text-gray-500 mb-2">
+                {searchQuery || statusFilter ? 'No engineers match your filters' : 'No engineers found'}
+            </div>
+            {(searchQuery || statusFilter) && (
+                <button 
+                    className="btn btn-sm btn-outline"
+                    onClick={() => {
+                        setSearchQuery('');
+                        setStatusFilter(null);
+                    }}
+                >
+                    Clear filters
+                </button>
+            )}
+        </div>
+    ) : (
+        <div className="overflow-x-auto bg-white/90 backdrop-blur-sm rounded-xl shadow-md">
+            <table className="table table-zebra">
+                <thead>
+                    <tr className="bg-[#6b6f1d] text-white">
+                        <th>Profile</th>
+                        <th>Name</th>
+                        <th>ID</th>
+                        <th>Status</th>
+                        <th>Branch</th>
+                        <th>Last Updated</th>
+                        <th>Contact</th>
+                        <th className="text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {/* Limit to 6 */}
+                    {filteredEngineers.slice(0, 6).map(engineer => (
+                        <tr key={engineer.id} className="hover">
+                     
+                            <td className="w-10">
+                                <div className="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center">
+                                    <span className="text-gray-500">{engineer.name.charAt(0)}</span>
                                 </div>
-                                {(searchQuery || statusFilter) && (
-                                    <button 
-                                        className="btn btn-sm btn-outline"
-                                        onClick={() => {
-                                            setSearchQuery('');
-                                            setStatusFilter(null);
-                                        }}
-                                    >
-                                        Clear filters
-                                    </button>
-                                )}
-                            </div>
-                        ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {filteredEngineers.map(engineer => (
-                                    <div key={engineer.id} className="bg-white/90 backdrop-blur-sm rounded-xl overflow-hidden shadow-md">
-                                        <div className={`
-                                            px-4 py-3 flex items-center justify-between
-                                            ${engineer.status === 'active' ? 'bg-green-500' : 
-                                              engineer.status === 'on assignment' ? 'bg-amber-500' : 'bg-gray-500'}
-                                        `}>
-                                            <h3 className="font-bold text-white">{engineer.name}</h3>
-                                            <span className="badge badge-sm text-xs bg-white/30 text-white border-none">
-                                                ID: {engineer.id}
-                                            </span>
-                                        </div>
-                                        
-                                        <div className="p-4">
-                                            <div className="grid grid-cols-2 gap-4 mb-4">
-                                                <div className="flex flex-col">
-                                                    <span className="text-xs text-gray-500">Status</span>
-                                                    <span className={`
-                                                        inline-flex items-center text-sm font-medium
-                                                        ${engineer.status === 'active' ? 'text-green-700' : 
-                                                          engineer.status === 'on assignment' ? 'text-amber-700' : 'text-gray-700'}
-                                                    `}>
-                                                        <span className={`
-                                                            w-2 h-2 mr-1.5 rounded-full
-                                                            ${engineer.status === 'active' ? 'bg-green-500' : 
-                                                              engineer.status === 'on assignment' ? 'bg-amber-500' : 'bg-gray-500'}
-                                                        `}></span>
-                                                        {engineer.status.charAt(0).toUpperCase() + engineer.status.slice(1)}
-                                                    </span>
-                                                </div>
-                                                
-                                                <div className="flex flex-col">
-                                                    <span className="text-xs text-gray-500">Last Updated</span>
-                                                    <span className="text-sm">{formatLastUpdated(engineer.lastUpdated)}</span>
-                                                </div>
-                                                
-                                                {engineer.phone && (
-                                                    <div className="flex flex-col">
-                                                        <span className="text-xs text-gray-500">Phone</span>
-                                                        <span className="text-sm">{engineer.phone}</span>
-                                                    </div>
-                                                )}
-                                                
-                                                {engineer.email && (
-                                                    <div className="flex flex-col">
-                                                        <span className="text-xs text-gray-500">Email</span>
-                                                        <span className="text-sm truncate">{engineer.email}</span>
-                                                    </div>
-                                                )}
-                                                
-                                                {engineer.assignedBranch && (
-                                                    <div className="flex flex-col col-span-2">
-                                                        <span className="text-xs text-gray-500">Assigned Branch</span>
-                                                        <span className="text-sm">{engineer.assignedBranch}</span>
-                                                    </div>
-                                                )}
-                                                
-                                                <div className="flex flex-col col-span-2">
-                                                    <span className="text-xs text-gray-500">Location</span>
-                                                    
-                                                </div>
-                                            </div>
-                                            
-                                            <div className="flex justify-between mt-2">
-                                                <button className="btn btn-sm btn-outline btn-primary">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
-                                                    </svg>
-                                                    Edit
-                                                </button>
-                                                
-                                                <button className="btn btn-sm">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
-                                                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
-                                                    </svg>
-                                                    Locate
-                                                </button>
-                                                
-                                                <button className="btn btn-sm btn-outline btn-error">
-                                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                                                    </svg>
-                                                    Remove
-                                                </button>
-                                            </div>
-                                        </div>
+                            </td>
+                            <td className="font-medium">{engineer.name}</td>
+                            <td className="text-sm text-gray-600">{engineer.id}</td>
+                            <td>
+                                <span className={`
+                                    inline-flex items-center text-sm font-medium
+                                    ${engineer.status === 'Active' ? 'text-green-700' : 
+                                      engineer.status === 'On Assignment' ? 'text-amber-700' : 'text-gray-700'}
+                                `}>
+                                    <span className={`
+                                        w-2 h-2 mr-1.5 rounded-full
+                                        ${engineer.status === 'Active' ? 'bg-green-500' : 
+                                          engineer.status === 'On Assignment' ? 'bg-amber-500' : 'bg-gray-500'}
+                                    `}></span>
+                                    {engineer.status.charAt(0).toUpperCase() + engineer.status.slice(1)}
+                                </span>
+                            </td>
+                            <td>{engineer.assignedBranch || "-"}</td>
+                            <td className="text-sm">{formatLastUpdated(engineer.lastUpdated)}</td>
+                            <td>
+                                <div className="flex flex-col">
+                                    {engineer.phone && <span className="text-sm">{engineer.phone}</span>}
+                                    {engineer.email && <span className="text-sm text-gray-600 truncate max-w-[150px]">{engineer.email}</span>}
+                                </div>
+                            </td>
+                            <td>
+                                <div className="flex justify-end gap-1">
+                                    <div className="tooltip">
+                                    <div className="tooltip-content">
+                                        <div className="animate-bounce text-orange-400 -rotate-10 text-2xl font-black">Edit</div>
                                     </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
+                                    <button className="btn btn-xs btn-outline btn-primary">
+                                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
+                                        </svg>
+                                    </button>
+                                    </div>
+                                     <div className="tooltip">
+                                    <div className="tooltip-content">
+                                        <div className="animate-bounce text-orange-400 -rotate-10 text-2xl font-black">Locate</div>
+                                    </div>
+                                    <button className="btn btn-xs">
+                                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+                                        </svg>
+                                    </button>
+                                    </div>
+                                     <div className="tooltip">
+                                    <div className="tooltip-content">
+                                        <div className="animate-bounce text-orange-400 -rotate-10 text-2xl font-black">Profile</div>
+                                    </div>
+                                    <button 
+                                        className="btn btn-xs btn-outline btn-active" 
+                                        onClick={() => handleProfileClick(engineer)}
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" className="w-3 h-3">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
+                                        </svg>
+                                    </button>
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    )}
+</div>
                 </div>
             </main>
 
