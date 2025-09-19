@@ -14,6 +14,7 @@ export interface FieldEngineer {
   name: string;
   status: string;
   lastUpdated: string;
+  fcmToken: string;
 }
 
 export interface ServiceRequest {
@@ -30,6 +31,12 @@ export interface ServiceRequest {
   currentRadiusKm: number;
 }
 
+export interface RouteStep {
+  maneuver: string;
+  roadName: string;
+  distance: string;
+}
+
 export interface OngoingRoute {
   id: number;
   feId: number;
@@ -41,5 +48,6 @@ export interface OngoingRoute {
   distance: string;
   duration: string;
   price: string;
+  routeSteps?: RouteStep[];
   status: 'in-progress' | 'delayed' | 'arriving';
 }

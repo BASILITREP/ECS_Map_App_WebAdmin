@@ -32,7 +32,7 @@ function FEPage() {
     const fetchFieldEngineers = async () => {
       try {
         setLoading(true);
-        const response = await fetch('http://localhost:5242/api/FieldEngineer');
+        const response = await fetch('https://ecsmapappwebadminbackend-production.up.railway.app/api/FieldEngineer');
 
         if (!response.ok) {
           throw new Error(`HTTP error! Status: ${response.status}`);
@@ -51,7 +51,7 @@ function FEPage() {
     // Add new engineer function
     const addNewEngineer = async (engineer: Omit<FieldEngineer, 'id'>) => {
         try {
-            const response = await fetch('http://localhost:5242/api/FieldEngineer', {
+            const response = await fetch('https://ecsmapappwebadminbackend-production.up.railway.app/FieldEngineer', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

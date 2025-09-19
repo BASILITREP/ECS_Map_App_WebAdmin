@@ -1,9 +1,10 @@
 import * as signalR from '@microsoft/signalr';
 import type { Branch, FieldEngineer, ServiceRequest, OngoingRoute } from '../types';
+import { toast } from 'react-toastify';
 
 // Use environment variable with fallback
-const API_URL = import.meta.env.VITE_API_URL || 'https://localhost:7126';
-
+//const API_URL ='https://sdstestwebservices.equicom.com/maps/hub';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5242';
 // Event callback types
 type EventCallback<T> = (data: T) => void;
 
@@ -20,6 +21,7 @@ const eventHandlers: {
   connected: [],
   disconnected: [],
   error: [],
+  CoordinateUpdate: [], // Add this line
 };
 
 // SignalR connection
@@ -30,9 +32,15 @@ export const initializeSocket = async (): Promise<void> => {
   if (connection) return;
 
   connection = new signalR.HubConnectionBuilder()
-    .withUrl(`${API_URL}/notificationHub`)
+    .withUrl(`${API_URL}/notificationHub`, {
+      skipNegotiation: true,
+      transport: signalR.HttpTransportType.WebSockets
+    })
     .withAutomaticReconnect()
+    .configureLogging(signalR.LogLevel.Information)
     .build();
+
+  console.log('Attempting SignalR connection to:', `${API_URL}/notificationHub`);
 
   // Register event handlers
   connection.on('ReceiveFieldEngineerUpdate', (data: FieldEngineer) => {
@@ -44,6 +52,15 @@ export const initializeSocket = async (): Promise<void> => {
   });
 
   connection.on('ReceiveNewServiceRequest', (data: ServiceRequest) => {
+    // Show toast notification for new service requests
+    toast.info(`New service request created: ${data.branchName} at ${data.branchName}`, {
+      position: "top-right",
+      autoClose: 5000,
+      hideProgressBar: false,
+      closeOnClick: true,
+      pauseOnHover: true,
+      draggable: true,
+    });
     notifyEventHandlers('newServiceRequest', data);
   });
 
@@ -59,6 +76,26 @@ export const initializeSocket = async (): Promise<void> => {
     notifyEventHandlers('routeUpdate', data);
   });
 
+  connection.on('ReceiveNewFieldEngineer', (data: FieldEngineer) => {
+  console.log('New field engineer received via SignalR:', data);
+  notifyEventHandlers('ReceiveNewFieldEngineer', data);
+});
+
+connection.on('ReceiveNewBranch', (data: Branch) => {
+  console.log('New branch received via SignalR:', data);
+  notifyEventHandlers('newBranch', data);
+});
+
+  // Add this new event handler
+  connection.on('CoordinateUpdate', (data: any) => {
+    console.log('Boss coordinates received:', data);
+    toast.success(`Boss location updated: ${data.description}`, {
+      position: "top-right",
+      autoClose: 3000,
+    });
+    notifyEventHandlers('CoordinateUpdate', data);
+  });
+
   // Connection lifecycle events
   connection.onreconnected(() => {
     console.log('SignalR reconnected');
@@ -70,13 +107,20 @@ export const initializeSocket = async (): Promise<void> => {
     notifyEventHandlers('disconnected', null);
   });
 
+  // Add better error handling
+  connection.onclose((error) => {
+    console.log('SignalR connection closed:', error);
+    notifyEventHandlers('disconnected', null);
+  });
+
   try {
     await connection.start();
-    console.log('SignalR connected');
+    console.log('SignalR connected successfully');
     notifyEventHandlers('connected', null);
   } catch (err) {
-    console.error('SignalR connection error:', err);
+    console.error('SignalR connection failed:', err);
     notifyEventHandlers('error', err);
+    throw err;
   }
 };
 
@@ -117,10 +161,10 @@ export const isConnected = (): boolean => {
   return connection?.state === signalR.HubConnectionState.Connected;
 };
 
-// Add these new event types to your existing socketService
+// Update SocketEvent type
 export type SocketEvent = 
   'connected' | 'disconnected' | 'error' | 
-  'fieldEngineerUpdate' | 'newFieldEngineer' |  // Add newFieldEngineer
+  'fieldEngineerUpdate' | 'newFieldEngineer' |
   'serviceRequestUpdate' | 'newServiceRequest' |
   'newRoute' | 'routeUpdate' |
-  'newBranch';  // Add newBranch
+  'newBranch' | 'CoordinateUpdate'; // Add CoordinateUpdate

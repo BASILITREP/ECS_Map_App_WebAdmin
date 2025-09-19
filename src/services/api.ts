@@ -2,23 +2,23 @@ import type { Branch, FieldEngineer, ServiceRequest } from '../types';
 import { isConnected } from './socketService';
 
 // Use environment variable for API URL with fallback
-const API_URL = import.meta.env.VITE_API_URL || 'https://localhost:7126/api';
+const API_URL = import.meta.env.VITE_DB_URL || 'http://localhost:5242/api';
 
 // Define error handler
 const handleResponse = async (response: Response) => {
   if (!response.ok) {
     const text = await response.text();
+    console.error('API Error:', response.status, text);
     throw new Error(text || `Error: ${response.status}`);
   }
   
-  // Check if there's actual content before parsing JSON
   const contentType = response.headers.get('content-type');
   if (contentType && contentType.includes('application/json')) {
     const text = await response.text();
     return text ? JSON.parse(text) : null;
   }
   
-  return null; // Return null for empty or non-JSON responses
+  return null;
 };
 
 // API Functions
@@ -75,14 +75,31 @@ export const fetchServiceRequests = async (): Promise<ServiceRequest[]> => {
 
 export const createServiceRequest = async (data: { branchId: string, branch: Branch }) => {
   try {
+    const branchId = parseInt(data.branchId);
+    
+    // We need to map our frontend Branch model to match the backend's expected structure
     const response = await fetch(`${API_URL}/ServiceRequests`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      // Only send the branchId in the request body
       body: JSON.stringify({
-        branchId: parseInt(data.branchId)  // Convert string to number since the API expects an integer
+        branchId: branchId,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+        lat: data.branch.lat,
+        lng: data.branch.lng,
+        branchName: data.branch.name,
+        title: `Service Request for ${data.branch.name}`,
+        description: `Service required at ${data.branch.location}`,
+        priority: "Medium",
+        branch: {
+          id: branchId,
+          name: data.branch.name,
+          address: data.branch.location,
+          latitude: data.branch.lat,
+          longitude: data.branch.lng
+        }
       }),
     });
     
@@ -92,7 +109,6 @@ export const createServiceRequest = async (data: { branchId: string, branch: Bra
     throw error;
   }
 }
-
 export const acceptServiceRequest = async (
   serviceRequestId: string, 
   fieldEngineerId: number
@@ -107,4 +123,62 @@ export const acceptServiceRequest = async (
 
   // With sockets, we don't need to manually refresh data after operations
   // The server will broadcast the changes and our socket subscriptions will update the UI
+};
+
+export const loginUser = async (username: string, password: string) => {
+  const response = await fetch(`${API_URL}/api/auth/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ username, password }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Login failed");
+  }
+
+  return response.json();
+};
+
+export const isAuthenticated = () => {
+  return localStorage.getItem("token") !== null;
+};
+
+export const getAuthToken = () => {
+  return localStorage.getItem("token");
+};
+
+export const logout = () => {
+  localStorage.removeItem("token");
+  localStorage.removeItem("username");
+  localStorage.removeItem("role");
+};
+
+export const startFieldEngineerNavigation = async (
+  fieldEngineerId: number,
+  fieldEngineerName: string,
+  routeCoordinates: number[][]
+) => {
+  const response = await fetch(`${API_URL}/Test/startNavigation`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      fieldEngineerId,
+      fieldEngineerName,
+      routeCoordinates
+    }),
+  });
+  
+  return await handleResponse(response);
+};
+
+export const stopFieldEngineerNavigation = async (fieldEngineerId: number) => {
+  const response = await fetch(`${API_URL}/Test/stopNavigation/${fieldEngineerId}`, {
+    method: 'POST',
+  });
+  
+  return await handleResponse(response);
 };
