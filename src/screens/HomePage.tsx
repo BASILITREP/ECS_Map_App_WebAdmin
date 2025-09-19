@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
-import bg from '../assets/windowsyarn.jpg';
+import bg from '../assets/BDOBG.jpg';
 import Header from '../header/Header'; // Adjust the import path as necessary
 import type { Branch, FieldEngineer, ServiceRequest, OngoingRoute } from '../types';
+import { startFieldEngineerNavigation, stopFieldEngineerNavigation } from '../services/api';
+
+
 import {
   fetchBranches,
   fetchFieldEngineers,
@@ -13,10 +16,17 @@ import {
 } from '../services/api';
 import { initializeSocket, subscribe, unsubscribe } from '../services/socketService';
 
+// Define the RouteStep interface
+interface RouteStep {
+  maneuver: string;
+  roadName: string;
+  distance: string;
+}
+
 function HomePage() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
-  const markers = useRef<{ [key: number]: mapboxgl.Marker }>({});
+  const markers = useRef<{ [key: string | number]: mapboxgl.Marker }>({});
   const branchMarkers = useRef<{ [key: number]: mapboxgl.Marker }>({});
   const [fieldEngineers, setFieldEngineers] = useState<FieldEngineer[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -30,9 +40,20 @@ function HomePage() {
   const [showRouteOnMap, setShowRouteOnMap] = useState(false);
   const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
   const [socketConnected, setSocketConnected] = useState<boolean>(false);
+  const [showMapFilter, setShowMapFilter] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false); // Add sidebar state
+  const [searchQuery, setSearchQuery] = useState<string>(''); // Add search state
   const srLayers = useRef<Set<string>>(new Set());
   const routeLayerId = 'active-route-layer';
+  
+  // Filter branches based on search query
+  const filteredBranches = branches.filter(branch => 
+    searchQuery === '' || 
+    branch.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    branch.location.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
+  
   // circle radius in SR
   const makeCircle = (lng: number, lat: number, radiusKm: number, points = 64) => {
     const coords: [number, number][] = [];
@@ -87,8 +108,19 @@ function HomePage() {
   // Service Requests API
   const fetchServiceRequestsData = async () => {
     try {
-      const data = await fetchServiceRequests();
-      setServiceRequests(data);
+      const requests: ServiceRequest[] = await fetchServiceRequests();
+      // Initialize radius for pending requests
+      const now = Date.now();
+      const updatedRequests = requests.map(sr => {
+        if (sr.status === 'pending') {
+          const minutesSinceCreation = (now - new Date(sr.createdAt).getTime()) / 60000;
+          // Assuming base radius is 1km and it grows 1km per minute, max 10km.
+          const radius = Math.min(10, 1 + Math.floor(minutesSinceCreation));
+          return { ...sr, currentRadiusKm: radius };
+        }
+        return { ...sr, currentRadiusKm: 0 };
+      });
+      setServiceRequests(updatedRequests);
     } catch (err) {
       console.error('Error fetching service requests:', err);
     }
@@ -129,7 +161,7 @@ function HomePage() {
     
     // Create new route object
     const newRoute: OngoingRoute = {
-      id: Date.now(), // Generate unique ID using timestamp
+      id: Date.now(), 
       feId: fe.id,
       feName: fe.name,
       branchId: branchIndex >= 0 ? branchIndex : 0,
@@ -139,14 +171,32 @@ function HomePage() {
       distance: "Calculating...",
       duration: "Calculating...",
       price: "₱0",
-      status: "in-progress"
+      status: "in-progress",
+      routeSteps: []
     };
     
     // Add the new route to existing routes
     setOngoingRoutes(prev => [...prev, newRoute]);
     
-    // Add this line to actually calculate the route info
-    updateRouteInfo(newRoute);
+    // Get the route from Mapbox and start navigation
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${fe.lng},${fe.lat};${branch.lng},${branch.lat}?steps=true&geometries=geojson&access_token=${mapboxgl.accessToken}`;
+    
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+      const routeData = data.routes[0];
+      const coordinates = routeData.geometry.coordinates;
+      
+      // Start the field engineer navigation along the polyline
+      console.log(`Starting navigation for ${fe.name} with ${coordinates.length} coordinates`);
+      await startFieldEngineerNavigation(fe.id, fe.name, coordinates);
+      
+      // Update route info with calculated data
+      updateRouteInfo(newRoute);
+    } else {
+      console.error('Failed to get route from Mapbox:', data);
+    }
     
     await fetchServiceRequestsData();
     await fetchFieldEngineersData();
@@ -154,6 +204,24 @@ function HomePage() {
     console.error('Error accepting service request:', err);
   }
 };
+
+// Add a function to stop navigation if needed
+const handleStopNavigation = async (feId: number) => {
+  try {
+    await stopFieldEngineerNavigation(feId);
+    console.log(`Navigation stopped for FE ${feId}`);
+  } catch (err) {
+    console.error('Error stopping navigation:', err);
+  }
+};
+
+const formatDistance = (distanceInMeters: number): string =>{
+  if (distanceInMeters < 1000) {
+    return `${Math.round(distanceInMeters)} m`;
+  } else{
+    return `${(distanceInMeters / 1000).toFixed(1)} km`;
+  }
+}
 
   // Add this new function to calculate real route information
  const updateRouteInfo = async (route: OngoingRoute) => {
@@ -186,15 +254,47 @@ function HomePage() {
 
     // route info
     const routeData = data.routes[0];
-    const distance = (routeData.distance / 1000).toFixed(1) + ' km';
+    const distanceValue = routeData.distance;
+    const distance = formatDistance(distanceValue);
     const durationMinutes = Math.round(routeData.duration / 60);
     const duration = durationMinutes + ' min';
 
+    //Extract route steps(max 5)
+    const routeSteps: RouteStep[] = [];
+    if (routeData.legs && routeData.legs.length > 0) {
+      const steps = routeData.legs[0].steps;
+
+      //get sig steps
+      const significantSteps = steps.length <= 5
+      ? steps
+      : [...steps.slice(0, 2), ...steps.slice(steps.length - 3)];
+
+      // Define step interface
+      interface MapboxStep {
+        maneuver: {
+          type: string;
+          modifier?: string;
+        };
+        name?: string;
+        distance: number;
+      }
+
+      significantSteps.forEach((step: MapboxStep) => {
+        routeSteps.push({
+          maneuver: step.maneuver.type === 'arrive'
+        ? 'Arrive at destination'
+        : getManeuverDescription(step.maneuver.type, step.maneuver.modifier),
+          roadName: step.name || 'Unnamed road',
+          distance: formatDistance(step.distance),
+        });
+      });
+    }
+
     // fare calculation
-    const distanceValue = parseFloat((routeData.distance / 1000).toFixed(1));
+    const distanceInKm = parseFloat((routeData.distance / 1000).toFixed(1));
     const baseFare = 45; // Base fare in PHP
     const ratePerKm = 15; // Rate per km in PHP
-    const price = `₱${Math.round(baseFare + (distanceValue * ratePerKm))}`;
+    const price = `₱${Math.round(baseFare + (distanceInKm * ratePerKm))}`;
 
     // Calculate ETA
     const startTime = new Date();
@@ -207,7 +307,7 @@ function HomePage() {
     setOngoingRoutes(prevRoutes => {
       const updatedRoutes = prevRoutes.map(r =>
         r.id === route.id
-          ? { ...r, distance, duration, price, estimatedArrival }
+          ? { ...r, distance, duration, price, estimatedArrival, routeSteps }
           : r
       );
       console.log('Routes updated:', updatedRoutes);
@@ -216,15 +316,198 @@ function HomePage() {
     
     // If this route is currently selected, update the display on the map
     if (selectedRoute && selectedRoute.id === route.id) {
-      handleShowRoute({ ...route, distance, duration, price, estimatedArrival });
+      handleShowRoute({ ...route, distance, duration, price, estimatedArrival, routeSteps });// Update the map display with new info
     }
   } catch (err) {
     console.error('Error updating route info:', err);
   }
 };
 
- useEffect(()=>{
-  const handleNewFieldEngineer = (fe: any) =>{
+const getManeuverDescription = (type: string, modifier?: string): string => {
+  switch (type) {
+    case 'turn':
+      return `Turn ${modifier || ''}`;
+    case 'depart':
+      return 'Depart from origin';
+    case 'arrive':
+      return 'Arrive at destination';
+    case 'roundabout':
+    case 'rotary':
+      return 'Enter roundabout';
+    case 'fork':
+      return `Take ${modifier || ''} fork`;
+    case 'merge':
+      return 'Merge';
+    case 'ramp':
+      return `Take ${modifier || ''} ramp`;
+    case 'on ramp':
+      return 'Take on ramp';
+    case 'off ramp':
+      return 'Take off ramp';
+    case 'end of road':
+      return 'End of road';
+    case 'new name':
+      return 'Continue onto';
+    default:
+      return type.charAt(0).toUpperCase() + type.slice(1);
+  }
+};
+
+// Add this useEffect to handle branch updates
+useEffect(() => {
+  const handleBranchUpdate = (branch: any) => {
+    console.log('Branch update received:', branch);
+    // Update existing branch or add new one
+    setBranches(prev => {
+      const index = prev.findIndex(b => b._id === branch.id.toString());
+      if (index >= 0) {
+        // Update existing branch
+        const newBranches = [...prev];
+        newBranches[index] = {
+          ...newBranches[index],
+          name: branch.name,
+          location: branch.address,
+          lat: branch.latitude,
+          lng: branch.longitude,
+          image: branch.image || newBranches[index].image
+        };
+        return newBranches;
+      }
+      return prev;
+    });
+  };
+  
+  subscribe('ReceiveBranchUpdate', handleBranchUpdate);
+  return () => {
+    unsubscribe('ReceiveBranchUpdate', handleBranchUpdate);
+  };
+}, []);
+
+   useEffect(() => {
+    if (map.current) {
+      // Small delay to allow CSS transition to complete
+      setTimeout(() => {
+        map.current?.resize();
+      }, 300);
+    }
+  }, [sidebarCollapsed]);
+
+  // Replace the existing handleBossCoordinates useEffect with this:
+
+useEffect(() => {
+  const handleBossCoordinates = (data: any) => {
+    console.log('Boss coordinates received:', data);
+    
+    if (!map.current || !data.latitude || !data.longitude) return;
+
+    const bossMarkerId = 'boss-marker';
+    const color = '#ff4444'; // Red color for boss
+
+    if (markers.current[bossMarkerId]) {
+      // Update existing marker position and make visible
+      markers.current[bossMarkerId].setLngLat([data.longitude, data.latitude]);
+      markers.current[bossMarkerId].getElement().style.display = 'block';
+      
+      // Update marker color (in case it changes)
+      const markerElement = markers.current[bossMarkerId].getElement();
+      markerElement.style.backgroundColor = color;
+      
+      // Update popup content
+      const timeString = new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      
+      const popup = new mapboxgl.Popup({ offset: 25 })
+        .setHTML(`
+          <div style="padding: 10px; text-align: center;">
+            <strong style="color: #ff4444;">👑 Boss Location</strong><br/>
+            <span style="color: #666; font-size: 12px;">${data.description || 'Boss is here'}</span><br/>
+            <span style="color: #888; font-size: 11px;">
+              Updated: ${timeString}
+            </span><br/>
+            <span style="color: #999; font-size: 10px;">
+              ${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}
+            </span>
+          </div>
+        `);
+      
+      markers.current[bossMarkerId].setPopup(popup);
+    } else {
+      // Create a new boss marker
+      const el = document.createElement('div');
+      el.className = 'boss-marker';
+      el.style.width = '25px';
+      el.style.height = '25px';
+      el.style.backgroundColor = color;
+      el.style.border = '3px solid white';
+      el.style.borderRadius = '50%';
+      el.style.boxShadow = '0 0 15px rgba(255, 68, 68, 0.8)';
+      el.style.cursor = 'pointer';
+      el.style.display = 'flex';
+      el.style.alignItems = 'center';
+      el.style.justifyContent = 'center';
+      el.style.fontSize = '12px';
+      el.innerHTML = '👑'; // Crown for boss
+
+      // Add animation ping effect (same as field engineers)
+      const ping = document.createElement('div');
+      ping.style.width = '100%';
+      ping.style.height = '100%';
+      ping.style.borderRadius = '50%';
+      ping.style.backgroundColor = `${color}80`; // Add transparency
+      ping.style.animation = 'ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite';
+      ping.style.position = 'absolute';
+      ping.style.top = '0';
+      ping.style.left = '0';
+      ping.style.zIndex = '-1';
+      el.style.position = 'relative';
+      el.appendChild(ping);
+
+      // Format the timestamp
+      const timeString = new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      // Add a popup
+      const popup = new mapboxgl.Popup({ offset: 25 })
+        .setHTML(`
+          <div style="padding: 10px; text-align: center;">
+            <strong style="color: #ff4444;">👑 Boss Location</strong><br/>
+            <span style="color: #666; font-size: 12px;">${data.description || 'Boss is here'}</span><br/>
+            <span style="color: #888; font-size: 11px;">
+              Updated: ${timeString}
+            </span><br/>
+            <span style="color: #999; font-size: 10px;">
+              ${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}
+            </span>
+          </div>
+        `);
+
+      // Create and store the marker
+      const marker = new mapboxgl.Marker(el)
+        .setLngLat([data.longitude, data.latitude])
+        .setPopup(popup)
+        .addTo(map.current);
+
+      markers.current[bossMarkerId] = marker;
+    }
+
+    // Fly to boss location with animation (keep this part)
+    map.current.flyTo({
+      center: [data.longitude, data.latitude],
+      zoom: 15,
+      duration: 2000
+    });
+  };
+
+  // Subscribe to boss coordinate updates
+  subscribe('CoordinateUpdate', handleBossCoordinates);
+  
+  return () => {
+    unsubscribe('CoordinateUpdate', handleBossCoordinates);
+  };
+}, []);
+
+
+
+ useEffect(() => {
+  const handleNewFieldEngineer = (fe: any) => {
     console.log('New field engineer received:', fe);
     const transformedFE: FieldEngineer = {
       id: fe.id,
@@ -233,15 +516,30 @@ function HomePage() {
       lat: fe.currentLatitude || 0,
       status: fe.status || 'Active',
       lastUpdated: fe.updatedAt || new Date().toISOString(),
+      fcmToken: fe.fcmToken || '',
     };
-    setFieldEngineers(prev => [...prev, transformedFE]);
+    console.log('Adding new field engineer to state:', transformedFE);
+    
+    // Update existing FE if it exists, otherwise add new one
+    setFieldEngineers(prev => {
+      const existingIndex = prev.findIndex(engineer => engineer.id === transformedFE.id);
+      if (existingIndex >= 0) {
+        // Update existing field engineer
+        const updated = [...prev];
+        updated[existingIndex] = transformedFE;
+        return updated;
+      } else {
+        // Add new field engineer
+        return [...prev, transformedFE];
+      }
+    });
   };
 
-  subscribe('newFieldEngineer', handleNewFieldEngineer);
-  return () =>{
-    unsubscribe('newFieldEngineer', handleNewFieldEngineer);
+  subscribe('ReceiveNewFieldEngineer', handleNewFieldEngineer); // Changed from 'newFieldEngineer'
+  return () => {
+    unsubscribe('ReceiveNewFieldEngineer', handleNewFieldEngineer);
   }
- }, []);
+}, []);
 
  useEffect(() =>{
   const handleNewBranch = (branch: any) =>{
@@ -254,6 +552,7 @@ function HomePage() {
       lat: branch.latitude,
       lng: branch.longitude,
     };
+    console.log('Adding new branch to state:', transformedBranch);
     setBranches(prev => [...prev, transformedBranch]);
   };
   subscribe('newBranch', handleNewBranch);
@@ -341,6 +640,25 @@ function HomePage() {
   //   };
   // }, [branches]);
 
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setServiceRequests((prevRequests) =>
+        prevRequests.map((sr) => {
+          if (sr.status === 'pending') {
+            const minutesSinceCreation = (now - new Date(sr.createdAt).getTime()) / 60000;
+            // Assuming base radius is 1km and it grows 1km per minute, max 10km.
+            const radius = Math.min(10, 1 + Math.floor(minutesSinceCreation));
+            return { ...sr, currentRadiusKm: radius };
+          }
+          return sr;
+        })
+      );
+    }, 60000); // Update radius every minute
+
+  return () => clearInterval(interval); // Cleanup interval
+}, []);
 
 
   useEffect(() => {
@@ -452,17 +770,18 @@ function HomePage() {
     });
   }, [serviceRequests]);
 
-  const handleShowRoute = async (route: OngoingRoute) => {
+const handleShowRoute = async (route: OngoingRoute) => {
+  // Clear the previous route from the map
+  clearRouteFromMap();
+
+  // Update the selected route state
   setSelectedRoute(route);
-  setShowRouteOnMap(true); // Set this to true when showing a route
+  setShowRouteOnMap(true);
 
   const fe = fieldEngineers.find(fe => fe.id === route.feId);
   const branch = branches[route.branchId];
 
   if (fe && branch && map.current) {
-    // Clear any existing route first
-    clearRouteFromMap();
-
     console.log(`Showing route from FE (${fe.lat}, ${fe.lng}) to branch (${branch.lat}, ${branch.lng})`);
 
     const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${fe.lng},${fe.lat};${branch.lng},${branch.lat}?geometries=geojson&access_token=${mapboxgl.accessToken}`;
@@ -481,8 +800,8 @@ function HomePage() {
         data: {
           type: 'Feature',
           properties: {},
-          geometry: routeGeo
-        }
+          geometry: routeGeo,
+        },
       });
 
       map.current.addLayer({
@@ -491,25 +810,26 @@ function HomePage() {
         source: routeLayerId,
         layout: {
           'line-join': 'round',
-          'line-cap': 'round'
+          'line-cap': 'round',
         },
         paint: {
-          'line-color': route.status === 'delayed' ? '#FF6B6B' : (route.status === 'arriving' ? '#4CAF50' : '#3887BE'),
+          'line-color': route.status === 'delayed' ? '#FF6B6B' : route.status === 'arriving' ? '#4CAF50' : '#3887BE',
           'line-width': 4,
           'line-opacity': 0.8,
-          'line-dasharray': route.status === 'delayed' ? [2, 1] : [1]
-        }
+          'line-dasharray': route.status === 'delayed' ? [2, 1] : [1],
+        },
       });
 
       // Fit map to the route
       const coordinates = routeGeo.coordinates;
-      const bounds = coordinates.reduce((b: mapboxgl.LngLatBounds, coord: [number, number]) => {
-        return b.extend(coord);
-      }, new mapboxgl.LngLatBounds(coordinates[0], coordinates[0]));
+      const bounds = coordinates.reduce(
+        (b: mapboxgl.LngLatBounds, coord: [number, number]) => b.extend(coord),
+        new mapboxgl.LngLatBounds(coordinates[0], coordinates[0])
+      );
 
       map.current.fitBounds(bounds, {
         padding: 80,
-        maxZoom: 14
+        maxZoom: 14,
       });
 
       console.log('Route displayed on map');
@@ -517,23 +837,23 @@ function HomePage() {
       console.error('Error fetching route from Mapbox Directions API:', err);
     }
   } else {
-    console.error('Missing data for route display:', { 
-      fe: fe ? `Found FE ${fe.name}` : 'FE not found', 
-      branch: branch ? `Found branch ${branch.name}` : 'Branch not found', 
-      map: map.current ? 'Map exists' : 'Map not initialized' 
+    console.error('Missing data for route display:', {
+      fe: fe ? `Found FE ${fe.name}` : 'FE not found',
+      branch: branch ? `Found branch ${branch.name}` : 'Branch not found',
+      map: map.current ? 'Map exists' : 'Map not initialized',
     });
   }
 };
 
   // Function to clear route from map
   const clearRouteFromMap = () => {
-    if (map.current && map.current.getLayer(routeLayerId)) {
-      map.current.removeLayer(routeLayerId);
-      map.current.removeSource(routeLayerId);
-      setShowRouteOnMap(false);
-      setSelectedRoute(null);
-    }
-  };
+  if (map.current && map.current.getLayer(routeLayerId)) {
+    map.current.removeLayer(routeLayerId);
+    map.current.removeSource(routeLayerId);
+  }
+  setShowRouteOnMap(false);
+  setSelectedRoute(null);
+};
 
 
 
@@ -589,87 +909,107 @@ function HomePage() {
   // Update the field engineers useEffect
 
   // Update markers when field engineers data changes or filters change
-  useEffect(() => {
-    if (!map.current || loading || fieldEngineers.length === 0) return;
+useEffect(() => {
+  if (!map.current || loading || fieldEngineers.length === 0) return;
 
-    // First, hide all existing markers
-    Object.values(markers.current).forEach(marker => {
-      marker.getElement().style.display = 'none';
-    });
+  // First, hide all existing markers
+  Object.values(markers.current).forEach(marker => {
+    marker.getElement().style.display = 'none';
+  });
 
-    // Skip processing if field engineers are hidden
-    if (!showFieldEngineers) return;
+  // Skip processing if field engineers are hidden
+  if (!showFieldEngineers) return;
 
-    // Filter engineers based on status if filter is set
-    const filteredEngineers = statusFilter
-      ? fieldEngineers.filter(eng => eng.status === statusFilter)
-      : fieldEngineers;
+  // Filter engineers based on status if filter is set
+  const filteredEngineers = statusFilter
+    ? fieldEngineers.filter(eng => eng.status === statusFilter)
+    : fieldEngineers;
 
-    // Update existing markers and add new ones
-    filteredEngineers.forEach(engineer => {
-      // Status color mapping
-      const statusColors = {
-        'Active': '#4CAF50', // Green
-        'On Assignment': '#FFA500', // Orange
-        'Inactive': '#9E9E9E', // Grey
-      };
+  // Update existing markers and add new ones
+  filteredEngineers.forEach(engineer => {
+    // Status color mapping
+    const statusColors = {
+      'Active': '#4CAF50', // Green
+      'On Assignment': '#FFA500', // Orange
+      'Inactive': '#9E9E9E', // Grey
+    };
 
-      const color = statusColors[engineer.status as keyof typeof statusColors] || '#ff4d4f';
+    const color = statusColors[engineer.status as keyof typeof statusColors] || '#ff4d4f';
 
-      if (markers.current[engineer.id]) {
-        // Update existing marker position and make visible
-        markers.current[engineer.id].setLngLat([engineer.lng, engineer.lat]);
-        markers.current[engineer.id].getElement().style.display = 'block';
-      } else {
-        // Create a new marker
-        const el = document.createElement('div');
-        el.className = 'field-engineer-marker';
-        el.style.width = '20px';
-        el.style.height = '20px';
-        el.style.backgroundColor = color;
-        el.style.border = '2px solid white';
-        el.style.borderRadius = '50%';
-        el.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.5)';
-        el.style.cursor = 'pointer';
+    if (markers.current[engineer.id]) {
+      // Update existing marker position and make visible
+      markers.current[engineer.id].setLngLat([engineer.lng, engineer.lat]);
+      markers.current[engineer.id].getElement().style.display = 'block';
+      
+      // Update marker color
+      const markerElement = markers.current[engineer.id].getElement();
+      markerElement.style.backgroundColor = color;
+      
+      // Update popup content
+      const lastUpdated = new Date(engineer.lastUpdated);
+      const timeString = lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      
+      const popup = new mapboxgl.Popup({ offset: 25 })
+        .setHTML(`
+        <div style="padding: 8px;">
+          <strong>${engineer.name}</strong><br/>
+          <span class="text-xs">Status: ${engineer.status}</span><br/>
+          <span class="text-xs">Last Updated: ${timeString}</span>
+        </div>
+      `);
+      
+      markers.current[engineer.id].setPopup(popup);
+    } else {
+      // Create a new marker
+      const el = document.createElement('div');
+      el.className = 'field-engineer-marker';
+      el.style.width = '20px';
+      el.style.height = '20px';
+      el.style.backgroundColor = color;
+      el.style.border = '2px solid white';
+      el.style.borderRadius = '50%';
+      el.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.5)';
+      el.style.cursor = 'pointer';
 
-        // Add animation ping effect
-        const ping = document.createElement('div');
-        ping.style.width = '100%';
-        ping.style.height = '100%';
-        ping.style.borderRadius = '50%';
-        ping.style.backgroundColor = `${color}80`; // Add transparency
-        ping.style.animation = 'ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite';
-        el.appendChild(ping);
+      // Add animation ping effect
+      const ping = document.createElement('div');
+      ping.style.width = '100%';
+      ping.style.height = '100%';
+      ping.style.borderRadius = '50%';
+      ping.style.backgroundColor = `${color}80`; // Add transparency
+      ping.style.animation = 'ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite';
+      el.appendChild(ping);
 
-        // Format the last updated time
-        const lastUpdated = new Date(engineer.lastUpdated);
-        const timeString = lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      // Format the last updated time
+      const lastUpdated = new Date(engineer.lastUpdated);
+      const timeString = lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-        // Add a popup
-        const popup = new mapboxgl.Popup({ offset: 25 })
-          .setHTML(`
-          <div style="padding: 8px;">
-            <strong>${engineer.name}</strong><br/>
-            <span class="text-xs">Status: ${engineer.status}</span><br/>
-            <span class="text-xs">Last Updated: ${timeString}</span>
-          </div>
-        `);
+      // Add a popup
+      const popup = new mapboxgl.Popup({ offset: 25 })
+        .setHTML(`
+        <div style="padding: 8px;">
+          <strong>${engineer.name}</strong><br/>
+          <span class="text-xs">Status: ${engineer.status}</span><br/>
+          <span class="text-xs">Last Updated: ${timeString}</span>
+        </div>
+      `);
 
-        // Create and store the marker
-        const marker = new mapboxgl.Marker(el)
-          .setLngLat([engineer.lng, engineer.lat])
-          .setPopup(popup)
-          .addTo(map.current!);
+      // Create and store the marker
+      const marker = new mapboxgl.Marker(el)
+        .setLngLat([engineer.lng, engineer.lat])
+        .setPopup(popup)
+        .addTo(map.current!);
 
-        markers.current[engineer.id] = marker;
-      }
-    });
-  }, [fieldEngineers, loading, showFieldEngineers, statusFilter]);
+      markers.current[engineer.id] = marker;
+    }
+  });
+}, [fieldEngineers, loading, showFieldEngineers, statusFilter]);
 
   // Initialize socket connection
   useEffect(() => {
     const initSocket = async () => {
       await initializeSocket();
+      
     };
     
     initSocket();
@@ -773,106 +1113,108 @@ function HomePage() {
     // Remove polling intervals since we're using sockets now
     // (The old polling code can be removed)
   }, []);
+  
 
   // Add a small connection indicator in your UI
   return (
     <div className="h-screen flex overflow-hidden bg-[#c8c87e]">
       {/* Main content */}
-      <main className="flex-1 flex flex-col overflow-hidden">
-        {/* Floating header container */}
+      <main className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ${
+        sidebarCollapsed ? 'lg:mr-12' : 'lg:mr-80'
+      }`}>
+        {/* Header */}
         <Header activePage="dashboard" />
         
         {/* Connection status indicator */}
-        <div className={`fixed top-4 right-4 z-50 px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1 ${
+        <div className={`fixed top-4 z-50 px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1 transition-all duration-300 ${
+          sidebarCollapsed ? 'right-16' : 'right-4'
+        } ${
           socketConnected ? 'bg-green-500/80' : 'bg-red-500/80'
         }`}>
           <div className={`w-2 h-2 rounded-full ${socketConnected ? 'bg-green-200 animate-pulse' : 'bg-red-200'}`}></div>
           <span className="text-white">{socketConnected ? 'Live' : 'Offline'}</span>
         </div>
-        
-        <div className="flex-1 overflow-y-auto">
-          {/* Filter panel */}
-          <div className="p-4 pt-0">
-            <div className="bg-[#6b6f1d]/90 backdrop-blur-sm shadow-md rounded-xl p-3">
-              <h3 className="text-white font-medium mb-2">Map Filters</h3>
 
-              <div className="flex flex-wrap gap-4">
-                {/* Item type filters */}
-                <div className="flex flex-col gap-2">
-                  <div className="text-white/80 text-sm">Show on Map:</div>
-                  <div className="flex gap-3">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="checkbox checkbox-sm checkbox-success"
-                        checked={showFieldEngineers}
-                        onChange={(e) => setShowFieldEngineers(e.target.checked)}
-                      />
-                      <span className="text-white">Field Engineers</span>
-                    </label>
+        {/* Main content area with proper spacing */}
+        <div className="flex-1 overflow-y-auto relative">
+          
+          {/* Map Container - Full width */}
+          <div className="relative">
+            {/* Map Filter Toggle - Positioned over map */}
+            {showMapFilter && (
+              <div className="absolute top-4 left-4 z-30 bg-[#6b6f1d]/90 backdrop-blur-sm shadow-md rounded-xl p-3 max-w-sm">
+                <h3 className="text-white font-medium mb-2">Map Filters</h3>
 
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="checkbox checkbox-sm checkbox-warning"
-                        checked={showBranches}
-                        onChange={(e) => setShowBranches(e.target.checked)}
-                      />
-                      <span className="text-white">Branches</span>
-                    </label>
+                <div className="flex flex-wrap gap-4">
+                  {/* Item type filters */}
+                  <div className="flex flex-col gap-2">
+                    <div className="text-white/80 text-sm">Show on Map:</div>
+                    <div className="flex gap-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-sm checkbox-success"
+                          checked={showFieldEngineers}
+                          onChange={(e) => setShowFieldEngineers(e.target.checked)}
+                        />
+                        <span className="text-white">Field Engineers</span>
+                      </label>
+
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="checkbox checkbox-sm checkbox-warning"
+                          checked={showBranches}
+                          onChange={(e) => setShowBranches(e.target.checked)}
+                        />
+                        <span className="text-white">Branches</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Status filters */}
+                  <div className="flex flex-col gap-2">
+                    <div className="text-white/80 text-sm">Engineer Status:</div>
+                    <div className="flex gap-2">
+                      <button
+                        className={`btn btn-xs ${statusFilter === null ? 'btn-primary' : 'btn-outline btn-primary'}`}
+                        onClick={() => setStatusFilter(null)}
+                      >
+                        All
+                      </button>
+                      <button
+                        className={`btn btn-xs ${statusFilter === 'Active' ? 'bg-green-600 border-green-600 text-white' : 'btn-outline border-green-600 text-green-600 hover:bg-green-600 hover:text-white'}`}
+                        onClick={() => setStatusFilter('Active')}
+                      >
+                        Active
+                      </button>
+                      <button
+                        className={`btn btn-xs ${statusFilter === 'On Assignment' ? 'bg-amber-500 border-amber-500 text-white' : 'btn-outline border-amber-500 text-amber-500 hover:bg-amber-500 hover:text-white'}`}
+                        onClick={() => setStatusFilter('On Assignment')}
+                      >
+                        On Assignment
+                      </button>
+                      <button
+                        className={`btn btn-xs ${statusFilter === 'Inactive' ? 'bg-gray-600 border-gray-600 text-white' : 'btn-outline border-gray-600 text-gray-600 hover:bg-gray-600 hover:text-white'}`}
+                        onClick={() => setStatusFilter('Inactive')}
+                      >
+                        Inactive
+                      </button>
+                    </div>
                   </div>
                 </div>
 
-                {/* Status filters */}
-                <div className="flex flex-col gap-2">
-                  <div className="text-white/80 text-sm">Engineer Status:</div>
-                  <div className="flex gap-2">
-                    <button
-                      className={`btn btn-xs ${statusFilter === null ? 'btn-primary' : 'btn-outline btn-primary'}`}
-                      onClick={() => setStatusFilter(null)}
-                    >
-                      All
-                    </button>
-                    <button
-                      className={`btn btn-xs ${statusFilter === 'Active' ? 'bg-green-600 border-green-600 text-white' : 'btn-outline border-green-600 text-green-600 hover:bg-green-600 hover:text-white'}`}
-                      onClick={() => setStatusFilter('Active')}
-                    >
-                      Active
-                    </button>
-                    <button
-                      className={`btn btn-xs ${statusFilter === 'On Assignment' ? 'bg-amber-500 border-amber-500 text-white' : 'btn-outline border-amber-500 text-amber-500 hover:bg-amber-500 hover:text-white'}`}
-                      onClick={() => setStatusFilter('On Assignment')}
-                    >
-                      On Assignment
-                    </button>
-                    <button
-                      className={`btn btn-xs ${statusFilter === 'Inactive' ? 'bg-gray-600 border-gray-600 text-white' : 'btn-outline border-gray-600 text-gray-600 hover:bg-gray-600 hover:text-white'}`}
-                      onClick={() => setStatusFilter('Inactive')}
-                    >
-                      Inactive
-                    </button>
-                  </div>
+                {/* Filter stats */}
+                <div className="mt-3 text-white/70 text-xs">
+                  Showing: {showFieldEngineers ? (statusFilter ? fieldEngineers.filter(fe => fe.status === statusFilter).length : fieldEngineers.length) : 0} Engineers, {showBranches ? branches.length : 0} Branches
                 </div>
               </div>
+            )}
 
-              {/* Filter stats */}
-              <div className="mt-3 text-white/70 text-xs">
-                Showing: {showFieldEngineers ? (statusFilter ? fieldEngineers.filter(fe => fe.status === statusFilter).length : fieldEngineers.length) : 0} Engineers, {showBranches ? branches.length : 0} Branches
-              </div>
-            </div>
-          </div>
-
-          <div className="p-4 pt-1 relative">
-            
-            <div
-              ref={mapContainer}
-              className="w-full h-[28rem] lg:h-[34rem] rounded-2xl overflow-hidden bg-base-200"
-            />
-
-            {/* Map Legend goes here */}
-
-            {/* Map Legend */}
-            <div className="absolute top-4 left-4 bg-white/90 backdrop-blur-sm rounded-lg p-2 shadow-lg text-sm ml-3.5">
+            {/* Map Legend - Positioned over map with dynamic positioning */}
+            <div className={`absolute top-4 z-30 bg-white/90 backdrop-blur-sm rounded-lg p-2 shadow-lg text-sm transition-all duration-300 ${
+              sidebarCollapsed ? 'right-16' : 'right-4'
+            }`}>
               <div className="font-medium mb-1">Legend</div>
               <div className="flex items-center gap-1 mb-1">
                 <div className="w-3 h-3 rounded-full bg-green-500"></div>
@@ -892,28 +1234,39 @@ function HomePage() {
                 </div>
                 <span>Branch</span>
               </div>
+              <button
+                className="btn btn-sm btn-primary mt-2 w-full"
+                onClick={() => setShowMapFilter(!showMapFilter)}
+              >
+                {showMapFilter ? 'Hide Filters' : 'Show Filters'}
+              </button>
             </div>
 
+            {/* Map */}
+            <div
+              ref={mapContainer}
+              className="w-full h-[400px] lg:h-[500px] bg-base-200"
+            />
+
             {loading && (
-              <div className="flex justify-center mt-4">
+              <div className="absolute inset-0 flex items-center justify-center bg-black/20 z-20">
                 <span className="loading loading-spinner loading-lg text-primary"></span>
               </div>
             )}
             {error && (
-              <div className="alert alert-error mt-4">
-                <span>{error}</span>
+              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20">
+                <div className="alert alert-error">
+                  <span>{error}</span>
+                </div>
               </div>
             )}
           </div>
 
-
-
-          
-
-          {/* Ongoing Routes panel */}
-          <div className="p-4 pt-0">
-            <div className="bg-[#6b6f1d]/90 backdrop-blur-sm shadow-md rounded-xl p-3">
-              <div className="flex justify-between items-center mb-2">
+          {/* Content below map */}
+          <div className="p-4 space-y-4">
+            {/* Ongoing Routes panel */}
+            <div className="bg-[#6b6f1d]/90 backdrop-blur-sm shadow-md rounded-xl p-4">
+              <div className="flex justify-between items-center mb-3">
                 <h3 className="text-white font-medium">Ongoing Field Engineer Routes</h3>
                 {showRouteOnMap && (
                   <button
@@ -945,7 +1298,7 @@ function HomePage() {
                     <div
                       key={route.id}
                       className={`bg-white/10 rounded-lg p-3 cursor-pointer transition-all hover:bg-white/20 
-              ${selectedRoute?.id === route.id ? 'ring-2 ring-yellow-400 bg-white/20' : ''}`}
+                        ${selectedRoute?.id === route.id ? 'ring-2 ring-yellow-400 bg-white/20' : ''}`}
                       onClick={() => handleShowRoute(route)}
                     >
                       <div className="flex justify-between items-start">
@@ -955,7 +1308,7 @@ function HomePage() {
                         </div>
 
                         <div className={`px-2 py-1 rounded-full text-xs font-medium
-                ${route.status === 'in-progress' ? 'bg-blue-500/80' :
+                          ${route.status === 'in-progress' ? 'bg-blue-500/80' :
                             route.status === 'delayed' ? 'bg-red-500/80' : 'bg-green-500/80'}`}>
                           {route.status === 'in-progress' ? 'In Progress' :
                             route.status === 'delayed' ? 'Delayed' : 'Arriving Soon'}
@@ -979,11 +1332,22 @@ function HomePage() {
 
                       <div className="mt-3 pt-2 border-t border-white/10 flex items-center justify-between">
                         <div className="text-xs text-white/70">Started: {route.startTime}</div>
-                        <div className="flex items-center gap-1 text-xs text-white/90">
-                          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 00-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0z" />
-                          </svg>
-                          View Details
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="btn btn-xs btn-error"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleStopNavigation(route.feId);
+                            }}
+                          >
+                            Stop
+                          </button>
+                          <div className="flex items-center gap-1 text-xs text-white/90">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 00-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0z" />
+                            </svg>
+                            View Details
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -993,8 +1357,8 @@ function HomePage() {
 
               {/* Route details panel - only shows when a route is selected */}
               {selectedRoute && (
-                <div className="mt-3 bg-white/10 rounded-lg p-3 text-white">
-                  <div className="flex items-center justify-between mb-2">
+                <div className="mt-4 bg-white/10 rounded-lg p-4 text-white">
+                  <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-yellow-400">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m.503 3.498 4.875-2.437c.381-.19.622-.58.622-1.006V4.82c0-.836-.88-1.38-1.628-1.006l-3.869 1.934c-.317.159-.69.159-1.006 0L9.503 3.252a1.125 1.125 0 0 0-1.006 0L3.622 5.689C3.24 5.88 3 6.27 3 6.695V19.18c0 .836.88 1.38 1.628 1.006l3.869-1.934c.317-.159.69-.159 1.006 0l4.994 2.497c.317.158.69.158 1.006 0Z" />
@@ -1002,7 +1366,7 @@ function HomePage() {
                       <span className="font-medium">Route Details</span>
                     </div>
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium
-            ${selectedRoute.status === 'in-progress' ? 'bg-blue-500/80' :
+                      ${selectedRoute.status === 'in-progress' ? 'bg-blue-500/80' :
                         selectedRoute.status === 'delayed' ? 'bg-red-500/80' : 'bg-green-500/80'}`}>
                       {selectedRoute.status === 'in-progress' ? 'In Progress' :
                         selectedRoute.status === 'delayed' ? 'Delayed' : 'Arriving Soon'}
@@ -1034,154 +1398,59 @@ function HomePage() {
                       </div>
                     </div>
                   </div>
-                  <div className="grid grid-cols-3 gap-4 text-center h-18 ">
-                    <ul className="timeline timeline-horizontal text-white">
+                  {/* Route timeline - horizontal version */}
+<div className="mt-3 pb-4 overflow-x-auto">
+  <div className="min-w-[700px]">
+    <ul className="steps steps-horizontal w-full">
+      <li className="step step-success">
+        <div className="text-center">
+          <div className="font-bold">Route Started</div>
+          <div className="text-xs">{selectedRoute.startTime}</div>
+        </div>
+      </li>
+      
+      {/* Route steps from Mapbox directions */}
+      {selectedRoute.routeSteps?.map((step, index) => (
+        <li key={index} className="step step-primary">
+          <div className="text-center max-w-[150px]">
+            <div className="font-bold">{step.maneuver}</div>
+            <div className="text-xs whitespace-normal">{step.roadName || 'Unnamed road'}</div>
+            <div className="text-xs text-yellow-200">{step.distance}</div>
+          </div>
+        </li>
+      ))}
+      
+      <li className="step">
+        <div className="text-center">
+          <div className="font-bold">Arrival</div>
+          <div className="text-xs">{selectedRoute.estimatedArrival}</div>
+        </div>
+      </li>
+    </ul>
+  </div>
+</div>
 
-                      <li>
-                        <div className="timeline-start timeline-box bg-white/20 border-none flex">
-                          <div className="font-bold">Route Started</div>
-                          <div className="text-xs">{selectedRoute.startTime}</div>
-                        </div>
-                        <div className="timeline-middle">
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 20 20"
-                            fill="currentColor"
-                            className="h-5 w-5 text-green-400"
-                          >
-                            <path
-                              fillRule="evenodd"
-                              d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                        </div>
-                        <hr className="bg-white/20" />
-                      </li>
-                      <li>
-                        <hr className="bg-white/20" />
-                        <div className="timeline-start timeline-box bg-white/20 border-none flex">
-                          <div className="font-bold">Departed Base</div>
-                          <div className="text-xs">{new Date(new Date(selectedRoute.startTime).getTime() + 5 * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                        </div>
-                        <div className="timeline-middle">
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 20 20"
-                            fill="currentColor"
-                            className="h-5 w-5 text-green-400"
-                          >
-                            <path
-                              fillRule="evenodd"
-                              d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                        </div>
-                        <hr className="bg-white/20" />
-                      </li>
-                      <li>
-                        <hr className="bg-white/20" />
-                        <div className="timeline-start timeline-box bg-white/20 border-none flex">
-                          <div className="font-bold">In Transit</div>
-                          <div className="text-xs text-yellow-300">Current Location</div>
-                        </div>
-                        <div className="timeline-middle">
-                          {selectedRoute.status === 'delayed' ? (
-                            <svg
-                              xmlns="http://www.w3.org/2000/svg"
-                              viewBox="0 0 20 20"
-                              fill="currentColor"
-                              className="h-5 w-5 text-red-400"
-                            >
-                              <path
-                                fillRule="evenodd"
-                                d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z"
-                                clipRule="evenodd"
-                              />
-                            </svg>
-                          ) : (
-                            <svg
-                              xmlns="http://www.w3.org/2000/svg"
-                              viewBox="0 0 20 20"
-                              fill="currentColor"
-                              className="h-5 w-5 text-blue-400 animate-pulse"
-                            >
-                              <path
-                                fillRule="evenodd"
-                                d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z"
-                                clipRule="evenodd"
-                              />
-                            </svg>
-                          )}
-                        </div>
-                        <hr className="bg-white/20" />
-                      </li>
-                      {/* <li>
-                        <hr className="bg-white/20" />
-                        <div className="timeline-start timeline-box bg-white/20 border-none flex">
-                          <div className="font-bold">Approaching Destination</div>
-                          <div className="text-xs text-gray-300">Estimated</div>
-                        </div>
-                        <div className="timeline-middle">
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 20 20"
-                            fill="currentColor"
-                            className="h-5 w-5 text-gray-400"
-                          >
-                            <path
-                              fillRule="evenodd"
-                              d="M10 18a8 8 0 100-16 8 8 0 000 16zm.75-13a.75.75 0 00-1.5 0v5c0 .414.336.75.75.75h4a.75.75 0 000-1.5h-3.25V5z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                        </div>
-                        <hr className="bg-white/20" />
-                      </li> */}
-                      <li>
-                        <hr className="bg-white/20" />
-                        <div className="timeline-start timeline-box bg-white/20 border-none flex">
-                          <div className="font-bold">Arrival at {selectedRoute.branchName}</div>
-                          <div className="text-xs">{selectedRoute.estimatedArrival}</div>
-                        </div>
-                        <div className="timeline-middle">
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 20 20"
-                            fill="currentColor"
-                            className="h-5 w-5 text-gray-400"
-                          >
-                            <path
-                              fillRule="evenodd"
-                              d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                        </div>
-                      </li>
-                    </ul>
-                    </div>
+<div className="flex items-center justify-between mt-4">
+  <div className="flex items-center gap-2">
+    <div className="bg-white/10 rounded-md px-2 py-1 text-sm">
+      <span className="text-white/70 mr-1">Fare:</span>
+      <span className="font-medium">{selectedRoute.price}</span>
+    </div>
+    <div className="bg-white/10 rounded-md px-2 py-1 text-sm">
+      <span className="text-white/70 mr-1">Mode:</span>
+      <span className="font-medium">Car</span>
+    </div>
+  </div>
+
+  <button className="btn btn-sm btn-primary">
+    Contact Engineer
+  </button>
+</div>
 
 
                     
 
-                    <div className=" flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="bg-white/10 rounded-md px-2 py-1 text-sm">
-                          <span className="text-white/70 mr-1">Fare:</span>
-                          <span className="font-medium">{selectedRoute.price}</span>
-                        </div>
-                        <div className="bg-white/10 rounded-md px-2 py-1 text-sm">
-                          <span className="text-white/70 mr-1">Mode:</span>
-                          <span className="font-medium">Car</span>
-                        </div>
-                      </div>
-
-                      <button className="btn btn-sm btn-primary">
-                        Contact Engineer
-                      </button>
-                    </div>
+                   
                   </div>
     )}
                 </div>
@@ -1196,12 +1465,12 @@ function HomePage() {
                   </div>
 
                   {/* Pending requests list */}
-                  <div className="mt-2 space-y-2">
+                  <div className="mt-2 space-y-3">
                     {serviceRequests.filter(s => s.status === 'pending').length === 0 ? (
                       <div className="bg-black/10 rounded-lg p-3 text-white/80">No pending service requests</div>
                     ) : (
                       serviceRequests.filter(s => s.status === 'pending').map(sr => {
-                        // find nearest FE within radius
+                        // find all FEs within radius
                         const inRange = fieldEngineers
                           .filter(fe => fe.status !== 'Inactive')
                           .map(fe => {
@@ -1217,7 +1486,6 @@ function HomePage() {
                           })
                           .filter(x => x.km <= sr.currentRadiusKm)
                           .sort((a, b) => a.km - b.km);
-                        const best = inRange[0];
                         
                         // Check if this service request is already assigned to a route
                         const isAssigned = ongoingRoutes.some(route => 
@@ -1225,25 +1493,42 @@ function HomePage() {
                         );
                         
                         return (
-                          <div key={sr.id} className="bg-black/20 p-3 rounded-lg flex items-center justify-between">
-                            <div>
-                              <div className="font-medium">{sr.branchName}</div>
-                              <div className="text-xs text-white/70">Radius: {sr.currentRadiusKm}km • Created {new Date(sr.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                              {isAssigned ? (
-                                <div className="text-xs text-green-300 mt-1">✓ Assigned to an engineer</div>
-                              ) : best ? (
-                                <div className="text-xs text-green-300 mt-1">Nearest FE in range: {best.fe.name} ({best.km.toFixed(2)} km)</div>
-                              ) : (
-                                <div className="text-xs text-yellow-300 mt-1">No FE within radius yet</div>
+                          <div key={sr.id} className="bg-black/20 p-3 rounded-lg">
+                            <div className="flex items-start justify-between">
+                              <div>
+                                <div className="font-medium">{sr.branchName}</div>
+                                <div className="text-xs text-white/70">Radius: {sr.currentRadiusKm}km • Created {new Date(sr.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                              </div>
+                              {isAssigned && (
+                                <div className="badge badge-success badge-sm text-black">✓ Assigned</div>
                               )}
                             </div>
-                            <button
-                              className="btn btn-xs btn-accent"
-                              disabled={!best || isAssigned}
-                              onClick={() => best && !isAssigned && handleAcceptServiceRequest(sr, best.fe)}
-                            >
-                              {isAssigned ? 'Assigned' : (best ? 'Accept' : 'Waiting')}
-                            </button>
+                            
+                            <div className="mt-2">
+                              {isAssigned ? (
+                                <div className="text-xs text-green-300 mt-1">This request has been assigned to an engineer.</div>
+                              ) : inRange.length > 0 ? (
+                                <div className="space-y-2">
+                                  <div className="text-xs text-green-300">{inRange.length} engineer(s) in range:</div>
+                                  {inRange.map(({ fe, km }) => (
+                                    <div key={fe.id} className="flex items-center justify-between bg-black/20 p-2 rounded-md">
+                                      <div>
+                                        <div className="text-sm font-medium">{fe.name}</div>
+                                        <div className="text-xs text-white/60">{km.toFixed(2)} km away • Status: {fe.status}</div>
+                                      </div>
+                                      <button
+                                        className="btn btn-xs btn-accent"
+                                        onClick={() => handleAcceptServiceRequest(sr, fe)}
+                                      >
+                                        Assign
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-xs text-yellow-300 mt-1">No FE within radius yet.</div>
+                              )}
+                            </div>
                           </div>
                         );
                       })
@@ -1260,89 +1545,241 @@ function HomePage() {
 
 
 
-      {/* Right sidebar, Branches list */}
-      <aside className="bg-[#6b6f1d] hidden md:flex w-80 shrink-0 flex-col backdrop-blur p-4 gap-4 overflow-y-auto">
-        <div className="hidden sm:block ">
-          <div className="form-control">
-            <div className="input-group">
-              <input
-                type="text"
-                placeholder="Search..."
-                className="input input-sm input-bordered w-24 md:w-auto bg-white/30 text-black placeholder-white/70"
-              />
-              <button className="btn btn-sm btn-square bg-white/20 border-0">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-              </button>
+      {/* Navigation Rail Sidebar */}
+      <aside className={`fixed right-0 top-0 h-full bg-[#6b6f1d] backdrop-blur transition-all duration-300 z-40 flex flex-col shadow-2xl ${
+        sidebarCollapsed ? 'w-12' : 'w-80'
+      }`}>
+        
+        {/* Sidebar Toggle Button */}
+        <div className="p-2 border-b border-white/10">
+          <button
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className="w-full flex items-center justify-center p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+            title={sidebarCollapsed ? 'Expand Sidebar' : 'Collapse Sidebar'}
+          >
+            <svg 
+              xmlns="http://www.w3.org/2000/svg" 
+              fill="none" 
+              viewBox="0 0 24 24" 
+              strokeWidth={1.5} 
+              stroke="currentColor" 
+              className={`w-5 h-5 text-white transition-transform duration-300 ${
+                sidebarCollapsed ? 'rotate-180' : ''
+              }`}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M18.75 19.5l-7.5-7.5 7.5-7.5m-6 15L5.25 12l7.5-7.5" />
+            </svg>
+            {!sidebarCollapsed && (
+              <span className="ml-2 text-white text-sm">Collapse</span>
+            )}
+          </button>
+        </div>
+
+        {/* Navigation Icons (always visible) */}
+        <div className="p-2 border-b border-white/10">
+          <div className="flex flex-col gap-2">
+            {/* Branches Icon */}
+            <div className={`flex items-center p-2 rounded-lg bg-white/10 ${
+              !sidebarCollapsed ? 'justify-start' : 'justify-center'
+            }`}>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-white">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15l-.75 18H5.25L4.5 3z" />
+              </svg>
+              {!sidebarCollapsed && (
+                <span className="ml-2 text-white text-sm font-medium">Branches</span>
+              )}
+              {!sidebarCollapsed && (
+                <span className="ml-auto bg-yellow-300/90 text-black text-xs px-2 py-1 rounded-full">
+                  {branches.length}
+                </span>
+              )}
+            </div>
+
+            {/* Pending Requests Icon */}
+            <div className={`flex items-center p-2 rounded-lg bg-orange-500/20 ${
+              !sidebarCollapsed ? 'justify-start' : 'justify-center'
+            }`}>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5 text-orange-300">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+              </svg>
+              {!sidebarCollapsed && (
+                <span className="ml-2 text-orange-300 text-sm font-medium">Pending</span>
+              )}
+              {!sidebarCollapsed && (
+                <span className="ml-auto bg-orange-500 text-white text-xs px-2 py-1 rounded-full">
+                  {serviceRequests.filter(s => s.status === 'pending').length}
+                </span>
+              )}
             </div>
           </div>
         </div>
 
-        <h1 className="text-2xl text-white">Branches</h1>
-
-        {/* Loading state */}
-        {loading && branches.length === 0 && (
-          <div className="flex justify-center py-8">
-            <span className="loading loading-spinner loading-md text-white"></span>
-          </div>
-        )}
-
-        {/* Error state */}
-        {error && branches.length === 0 && (
-          <div className="alert alert-error">
-            <span>{error}</span>
-          </div>
-        )}
-
-        {/* Dynamically display branches from database */}
-        {branches.map(branch => (
-          <div key={branch._id} className="rounded-2xl bg-[#c8c87e] p-3 shadow-xl text-black mb-4">
-            {/* Title + subtitle */}
-            <div className="px-1">
-              <h2 className="text-base font-semibold">{branch.name}</h2>
-              <p className="text-xs opacity-70">
-                {branch.location}
-              </p>
+        {/* Expanded Content */}
+        <div className={`flex-1 overflow-hidden transition-all duration-300 ${
+          sidebarCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'
+        }`}>
+          
+          {/* Search Bar */}
+          <div className="p-3 border-b border-white/10">
+            <div className="form-control">
+              <div className="input-group">
+                <input
+                  type="text"
+                  placeholder="Search branches..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="input input-sm input-bordered w-full bg-white/20 text-white placeholder-white/70 border-white/30 focus:border-white/50"
+                />
+                {/* <button className="btn btn-sm btn-square bg-white/20 border-white/30 hover:bg-white/30">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </button> */}
+              </div>
             </div>
-
-            {/* Image with overlay badge */}
-            <div className="relative mt-3 overflow-hidden rounded-xl">
-              <img
-                src={bg}
-                alt={branch.name}
-                className="h-32 w-full object-cover"
-                onError={(e) => {
-                  // Fallback image if the URL fails to load
-                  e.currentTarget.src = "https://images.unsplash.com/photo-1554469384-e58fac937bb4?q=80&w=1000&auto=format&fit=crop";
-                }}
-              />
-              <span className={`badge ${Math.random() > 1000 ? 'badge-success' : 'badge-error'} text-white font-medium absolute top-2 left-2 shadow`}>
-                {Math.random() > 1000 ? 'Assigned' : 'Not assigned'}
-              </span>
-            </div>
-
-            {/* Add Service Request Button directly to each branch card */}
-            <button 
-              className="btn btn-xs btn-warning w-full mt-3" 
-              onClick={() => handleCreateServiceRequest(branch)}
-            >
-              Request Service
-            </button>
+            
+            {/* Search Results Count */}
+            {searchQuery && (
+              <div className="mt-2 text-xs text-white/70">
+                Found {filteredBranches.length} of {branches.length} branches
+              </div>
+            )}
           </div>
-        ))}
 
-        {/* Empty state */}
-        {!loading && branches.length === 0 && !error && (
-          <div className="text-center py-8 text-white/80">
-            <p>No branches found</p>
-            <button
-              className="btn btn-sm btn-outline mt-2 text-white"
-              onClick={() => fetchBranches()}
-            >
-              Refresh
-            </button>
+          {/* Branches List */}
+          <div className="flex-1 overflow-y-auto p-3 space-y-3">
+            
+            {/* Loading state */}
+            {loading && branches.length === 0 && (
+              <div className="flex justify-center py-8">
+                <span className="loading loading-spinner loading-md text-white"></span>
+              </div>
+            )}
+
+            {/* Error state */}
+            {error && branches.length === 0 && (
+              <div className="alert alert-error">
+                <span>{error}</span>
+              </div>
+            )}
+
+            {/* No search results */}
+            {searchQuery && filteredBranches.length === 0 && branches.length > 0 && (
+              <div className="text-center py-8 text-white/80">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-12 h-12 mx-auto mb-2 text-white/50">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                </svg>
+                <p>No branches found</p>
+                <p className="text-sm">Try a different search term</p>
+              </div>
+            )}
+
+            {/* Branches */}
+            {filteredBranches.map(branch => (
+              <div key={branch._id} className="rounded-xl bg-[#c8c87e] p-3 shadow-lg text-black hover:shadow-xl transition-shadow">
+                {/* Title + subtitle */}
+                <div className="px-1">
+                  <h2 className="text-sm font-semibold truncate" title={branch.name}>{branch.name}</h2>
+                  <p className="text-xs opacity-70 truncate" title={branch.location}>
+                    {branch.location}
+                  </p>
+                </div>
+
+                {/* Image with overlay badge */}
+                <div className="relative mt-2 overflow-hidden rounded-lg">
+                  <img
+                    src={bg}
+                    alt={branch.name}
+                    className="h-24 w-full object-cover"
+                    onError={(e) => {
+                      e.currentTarget.src = "https://images.unsplash.com/photo-1554469384-e58fac937bb4?q=80&w=1000&auto=format&fit=crop";
+                    }}
+                  />
+                  
+                  {/* Status Badge */}
+                  {(() => {
+                    const hasActiveRoute = ongoingRoutes.some(route => route.branchId === branches.indexOf(branch));
+                    const hasPendingRequest = serviceRequests.some(sr => 
+                      sr.branchId === branch._id && sr.status === 'pending'
+                    );
+                    
+                    if (hasActiveRoute) {
+                      return (
+                        <span className="badge badge-error text-white font-medium absolute top-1 left-1 shadow text-xs">
+                          Assigned
+                        </span>
+                      );
+                    } else if (hasPendingRequest) {
+                      return (
+                        <span className="badge badge-warning text-white font-medium absolute top-1 left-1 shadow text-xs">
+                          Pending
+                        </span>
+                      );
+                    } else {
+                      return (
+                        <span className="badge badge-success text-white font-medium absolute top-1 left-1 shadow text-xs">
+                          Available
+                        </span>
+                      );
+                    }
+                  })()}
+                </div>
+
+                {/* Request Service Button */}
+                <button 
+                  className="btn btn-xs btn-warning w-full mt-2 text-xs" 
+                  onClick={() => handleCreateServiceRequest(branch)}
+                >
+                  Request Service
+                </button>
+              </div>
+            ))}
+
+            {/* Empty state */}
+            {!loading && branches.length === 0 && !error && (
+              <div className="text-center py-8 text-white/80">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-12 h-12 mx-auto mb-2 text-white/50">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15l-.75 18H5.25L4.5 3z" />
+                </svg>
+                <p>No branches found</p>
+                <button
+                  className="btn btn-sm btn-outline mt-2 text-white border-white/30 hover:bg-white/10"
+                  onClick={() => fetchBranchesData()}
+                >
+                  Refresh
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Collapsed State Indicators - Fixed positioning */}
+        {sidebarCollapsed && (
+          <div className="absolute top-40 left-1/2 transform -translate-x-1/2 space-y-2 z-10">
+            {/* Branch count indicator */}
+            <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+              <span className="text-white text-xs font-bold">{branches.length}</span>
+            </div>
+            
+            {/* Pending requests indicator */}
+            {serviceRequests.filter(s => s.status === 'pending').length > 0 && (
+              <div className="w-8 h-8 bg-orange-500/80 rounded-full flex items-center justify-center">
+                <span className="text-white text-xs font-bold">
+                  {serviceRequests.filter(s => s.status === 'pending').length}
+                </span>
+              </div>
+            )}
           </div>
         )}
       </aside>
+
+      {/* Overlay for mobile when sidebar is open */}
+      {!sidebarCollapsed && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-30 md:hidden"
+          onClick={() => setSidebarCollapsed(true)}
+        />
+      )}
     </div>
   );
 }

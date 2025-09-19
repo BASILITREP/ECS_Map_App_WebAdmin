@@ -59,170 +59,25 @@ function ActivityPage() {
 
     // Service Requests API
     const fetchServiceRequestsData = async () => {
-      try {
-        const data = await fetchServiceRequests();
-        setServiceRequests(data);
-      } catch (err) {
-        console.error('Error fetching service requests:', err);
-      }
-    };
-
-    const handleCreateServiceRequest = async (branch: Branch) => {
-    if (!branch._id) {
-      console.warn('Branch id missing');
-      return;
-    }
     try {
-      await apiCreateServiceRequest(branch._id);
-      await fetchServiceRequestsData();
+      const data = await fetchServiceRequests();
+      setServiceRequests(data);
     } catch (err) {
-      console.error('Error creating service request:', err);
-    }
-  };
-
-   
-
-  const handleAcceptServiceRequest = async (sr: ServiceRequest, fe: FieldEngineer) => {
-    try {
-      await apiAcceptServiceRequest(sr.id, fe.id);
-      await fetchServiceRequestsData();
-      await fetchFieldEngineersData();
-    } catch (err) {
-      console.error('Error accepting service request:', err);
+      console.error('Error fetching service requests:', err);
     }
   };
 
 
-  // Fetch activities from API or generate sample data
-  const fetchActivities = async () => {
-    setLoading(true);
-    try {
-      // For demo purposes, generate sample activities
-      const sampleActivities: Activity[] = [
-        {
-          id: 1,
-          type: 'assignment',
-          description: 'Field Engineer assigned to BDO Makati',
-          timestamp: '2025-08-20T08:30:00',
-          user: 'Admin',
-          feId: 1,
-          feName: 'John Santos',
-          branchId: 1,
-          branchName: 'BDO Makati',
-          status: 'assigned',
-          priority: 'medium'
-        },
-        {
-          id: 2,
-          type: 'alert',
-          description: 'Network issue detected at BDO Ortigas',
-          timestamp: '2025-08-20T09:15:00',
-          branchId: 2,
-          branchName: 'BDO Ortigas',
-          status: 'open',
-          priority: 'high'
-        },
-        {
-          id: 3,
-          type: 'login',
-          description: 'User login from new location',
-          timestamp: '2025-08-20T07:45:00',
-          user: 'Maria Cruz',
-          status: 'completed',
-          priority: 'low'
-        },
-        {
-          id: 4,
-          type: 'completion',
-          description: 'Service request completed at BDO BGC',
-          timestamp: '2025-08-19T16:30:00',
-          feId: 2,
-          feName: 'Alex Garcia',
-          branchId: 3,
-          branchName: 'BDO BGC',
-          status: 'completed',
-          priority: 'medium'
-        },
-        {
-          id: 5,
-          type: 'service',
-          description: 'New service request: ATM maintenance',
-          timestamp: '2025-08-19T14:20:00',
-          branchId: 4,
-          branchName: 'BDO Alabang',
-          status: 'pending',
-          priority: 'medium'
-        },
-        {
-          id: 6,
-          type: 'update',
-          description: 'System software updated to v2.3.4',
-          timestamp: '2025-08-18T23:15:00',
-          user: 'System',
-          status: 'completed',
-          priority: 'low'
-        },
-        {
-          id: 7,
-          type: 'alert',
-          description: 'Critical server error at data center',
-          timestamp: '2025-08-18T18:45:00',
-          status: 'resolved',
-          priority: 'critical'
-        },
-        {
-          id: 8,
-          type: 'assignment',
-          description: 'Field Engineer reassigned from BDO Makati to BDO MOA',
-          timestamp: '2025-08-18T10:30:00',
-          user: 'Admin',
-          feId: 3,
-          feName: 'Daniel Lee',
-          branchId: 5,
-          branchName: 'BDO MOA',
-          status: 'reassigned',
-          priority: 'low'
-        },
-        {
-          id: 9,
-          type: 'service',
-          description: 'Urgent service request: Security system failure',
-          timestamp: '2025-08-17T16:10:00',
-          branchId: 2,
-          branchName: 'BDO Ortigas',
-          status: 'in-progress',
-          priority: 'critical'
-        },
-        {
-          id: 10,
-          type: 'update',
-          description: 'Field Engineer status changed to inactive',
-          timestamp: '2025-08-17T09:05:00',
-          user: 'Admin',
-          feId: 4,
-          feName: 'Sarah Smith',
-          status: 'completed',
-          priority: 'low'
-        }
-      ];
-
-      // Sort activities by timestamp (newest first)
-      const sortedActivities = sampleActivities.sort((a, b) => 
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
-
-      setActivities(sortedActivities);
-      setLoading(false);
-    } catch (err) {
-      console.error('Error fetching activities:', err);
-      setError('Failed to load activity data');
-      setLoading(false);
-    }
-  };
+  
 
   // Load activities on component mount
   useEffect(() => {
-    fetchActivities();
+    fetchServiceRequestsData();
+  }, []);
+
+  // Load field engineers and branches on component mount
+  useEffect(() =>{
+    fetchFieldEngineersData();
   }, []);
 
   // Filter activities based on selected filters and search query
@@ -391,7 +246,7 @@ function ActivityPage() {
               <div className="flex gap-2 mt-2 md:mt-0">
                 <button 
                   className="btn btn-outline btn-sm"
-                  onClick={fetchActivities}
+                  onClick={fetchServiceRequestsData}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 mr-1">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
@@ -407,7 +262,7 @@ function ActivityPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="bg-white/90 rounded-lg p-3 shadow">
                 <div className="text-sm text-gray-500">Total Activities</div>
-                <div className="text-2xl font-bold">{activities.length}</div>
+                <div className="text-2xl font-bold">{serviceRequests.length}</div>
                 <div className="mt-2 text-xs text-gray-400">Last 7 days</div>
               </div>
               
@@ -423,7 +278,7 @@ function ActivityPage() {
               
               <div className="bg-white/90 rounded-lg p-3 shadow">
                 <div className="text-sm text-gray-500">Service Requests</div>
-                <div className="text-2xl font-bold">{getActivityCountByType('service')}</div>
+                <div className="text-2xl font-bold">{getActivityCountByType('accepted')}</div>
                 <div className="mt-2 text-xs text-gray-400">
                   {activities.filter(a => a.type === 'service' && a.status === 'in-progress').length} in progress
                 </div>
@@ -440,7 +295,7 @@ function ActivityPage() {
           </div>
 
           {/* cards */}
-              <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="p-4 grid grid-cols-1 gap-4">
 
 
                 {/* Field engineers card */}
@@ -465,7 +320,7 @@ function ActivityPage() {
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
-                            28 Available
+                            {fieldEngineers.filter(fe => fe.status === 'Active').length} Available
                           </div>
                           <div className="flex items-center gap-1 bg-white/20 px-2 py-1 rounded-lg text-xs">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3 h-3">
@@ -513,14 +368,17 @@ function ActivityPage() {
                         <div className="flex flex-col justify-end">
                           <div className="bg-red-500/70 rounded-t-md h-[40%]"></div>
                         </div>
+                        <div className="flex flex-col justify-end">
+                          <div className="bg-blue-500/70 rounded-t-md h-[70%]"></div>
+                        </div>
                       </div>
 
                       {/* Region labels */}
                       <div className="absolute bottom-0 w-full flex justify-between text-xs text-white/70">
                         <div>NCR</div>
-                        <div>North Luzon</div>
-                        <div>South Luzon</div>
-                        <div>Visayas & Mindanao</div>
+                        <div>Luzon</div>
+                        <div>Visayas</div>
+                        <div>Mindanao</div>
                       </div>
                     </div>
                   </div>
@@ -710,65 +568,43 @@ function ActivityPage() {
       <aside className="bg-[#6b6f1d] hidden lg:flex w-80 shrink-0 flex-col backdrop-blur p-4 gap-4 overflow-y-auto">
         <h2 className="text-xl text-white font-semibold">Activity Statistics</h2>
         
-        {/* Activity by Type Chart */}
-        <div className="bg-white/90 rounded-xl p-4">
-          <h3 className="font-medium mb-3">Activities by Type</h3>
-          <div className="space-y-2">
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span>Assignment</span>
-                <span className="font-medium">{getActivityCountByType('assignment')}</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
-                <div className="bg-blue-500 h-2.5 rounded-full" style={{ width: `${(getActivityCountByType('assignment') / activities.length) * 100}%` }}></div>
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span>Alert</span>
-                <span className="font-medium">{getActivityCountByType('alert')}</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
-                <div className="bg-red-500 h-2.5 rounded-full" style={{ width: `${(getActivityCountByType('alert') / activities.length) * 100}%` }}></div>
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span>Service</span>
-                <span className="font-medium">{getActivityCountByType('service')}</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
-                <div className="bg-cyan-500 h-2.5 rounded-full" style={{ width: `${(getActivityCountByType('service') / activities.length) * 100}%` }}></div>
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span>Completion</span>
-                <span className="font-medium">{getActivityCountByType('completion')}</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
-                <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${(getActivityCountByType('completion') / activities.length) * 100}%` }}></div>
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span>Other</span>
-                <span className="font-medium">{activities.length - 
-                  (getActivityCountByType('assignment') + 
-                   getActivityCountByType('alert') + 
-                   getActivityCountByType('service') + 
-                   getActivityCountByType('completion'))}</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2.5">
-                <div className="bg-gray-500 h-2.5 rounded-full" style={{ width: `${((activities.length - 
-                  (getActivityCountByType('assignment') + 
-                   getActivityCountByType('alert') + 
-                   getActivityCountByType('service') + 
-                   getActivityCountByType('completion'))) / activities.length) * 100}%` }}></div>
-              </div>
-            </div>
-          </div>
+        {/* Activity Heatmap */}
+<div className="bg-white/90 rounded-xl p-4">
+  <h3 className="font-medium mb-3">Activity Heatmap</h3>
+  <div className="grid grid-cols-7 gap-2 text-center">
+    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, index) => (
+      <div key={index} className="text-sm font-medium text-gray-500">{day}</div>
+    ))}
+  </div>
+  <div className="grid grid-cols-7 gap-2 mt-2">
+    {Array.from({ length: 42 }).map((_, index) => {
+      const activityCount = Math.floor(Math.random() * 10); // Replace with actual activity data
+      const intensity = activityCount === 0
+        ? 'bg-gray-200'
+        : activityCount < 3
+        ? 'bg-blue-200'
+        : activityCount < 6
+        ? 'bg-blue-400'
+        : 'bg-blue-600';
+
+      return (
+        <div
+          key={index}
+          className={`w-8 h-8 rounded-lg ${intensity} flex items-center justify-center text-xs text-white`}
+          title={`Activities: ${activityCount}`}
+        >
+          {activityCount > 0 ? activityCount : ''}
         </div>
+      );
+    })}
+  </div>
+  <div className="mt-4 text-sm text-gray-500">
+    <span className="inline-block w-4 h-4 bg-gray-200 rounded-full mr-2"></span> No Activity
+    <span className="inline-block w-4 h-4 bg-blue-200 rounded-full mx-2"></span> Low
+    <span className="inline-block w-4 h-4 bg-blue-400 rounded-full mx-2"></span> Medium
+    <span className="inline-block w-4 h-4 bg-blue-600 rounded-full mx-2"></span> High
+  </div>
+</div>
         
         {/* Activity by Priority */}
         <div className="bg-white/90 rounded-xl p-4">
