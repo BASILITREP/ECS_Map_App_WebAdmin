@@ -1061,27 +1061,38 @@ useEffect(() => {
 
   // Subscribe to service request updates
   useEffect(() => {
-    const handleServiceRequestUpdate = (sr: ServiceRequest) => {
-      setServiceRequests(prev => 
-        prev.map(request => 
-          request.id === sr.id ? { ...request, ...sr } : request
-        )
-      );
-    };
-    
-    const handleNewServiceRequest = (sr: ServiceRequest) => {
-      setServiceRequests(prev => [...prev, sr]);
-    };
-    
-    subscribe('serviceRequestUpdate', handleServiceRequestUpdate);
-    subscribe('newServiceRequest', handleNewServiceRequest);
-    
-    return () => {
-      unsubscribe('serviceRequestUpdate', handleServiceRequestUpdate);
-      unsubscribe('newServiceRequest', handleNewServiceRequest);
-    };
-  }, []);
+  const handleServiceRequestUpdate = (sr: ServiceRequest) => {
+    console.log('Service Request Update received:', sr);
 
+    setServiceRequests(prev =>
+      prev.filter(request => request.id !== sr.id) // Remove the updated request from the list
+    );
+
+    if (sr.status === 'accepted') {
+      const newRoute: OngoingRoute = {
+        id: Date.now(),
+        feId: sr.acceptedByFeId!,
+        feName: sr.acceptedByFeName!,
+        branchId: parseInt(sr.branchId),
+        branchName: sr.branchName,
+        status: 'in-progress',
+        estimatedArrival: sr.currentRadiusKm ? `${Math.round(sr.currentRadiusKm * 4)} mins` : 'Calculating...', 
+        distance: sr.currentRadiusKm ? `${sr.currentRadiusKm} km` : 'Calculating...',
+        duration: sr.currentRadiusKm ? `${Math.round(sr.currentRadiusKm * 4)} mins` : 'Calculating...', // Assuming avg speed 15km/h
+        price: sr.currentRadiusKm ? `$${(sr.currentRadiusKm * 50).toFixed(2)}` : 'Calculating...', 
+        routeSteps: [],
+        startTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setOngoingRoutes(prev => [...prev, newRoute]);
+    }
+  };
+
+  subscribe('serviceRequestUpdate', handleServiceRequestUpdate);
+
+  return () => {
+    unsubscribe('serviceRequestUpdate', handleServiceRequestUpdate);
+  };
+}, []);
   // Subscribe to route updates
   useEffect(() => {
     const handleNewRoute = (route: OngoingRoute) => {
@@ -1268,7 +1279,7 @@ useEffect(() => {
             <div className="bg-[#6b6f1d]/90 backdrop-blur-sm shadow-md rounded-xl p-4">
               <div className="flex justify-between items-center mb-3">
                 <h3 className="text-white font-medium">Ongoing Field Engineer Routes</h3>
-                {showRouteOnMap && (
+                {showRouteOnMap &&  (
                   <button
                     onClick={clearRouteFromMap}
                     className="btn btn-xs btn-ghost text-white/90"

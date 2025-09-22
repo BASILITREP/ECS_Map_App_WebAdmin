@@ -48,6 +48,7 @@ export const initializeSocket = async (): Promise<void> => {
   });
 
   connection.on('ReceiveServiceRequestUpdate', (data: ServiceRequest) => {
+    console.log('Service request update received via SignalR:', data);
     notifyEventHandlers('serviceRequestUpdate', data);
   });
 
