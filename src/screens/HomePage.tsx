@@ -4,6 +4,7 @@ import 'mapbox-gl/dist/mapbox-gl.css';
 import bg from '../assets/BDOBG.jpg';
 import Header from '../header/Header'; // Adjust the import path as necessary
 import type { Branch, FieldEngineer, ServiceRequest, OngoingRoute } from '../types';
+import {toast} from 'react-toastify';
 import { startFieldEngineerNavigation, stopFieldEngineerNavigation } from '../services/api';
 
 
@@ -79,6 +80,45 @@ function HomePage() {
     };
   };
 
+   const sampleLocationHistory = [
+    {
+      id: 1,
+      feId: 1, // Make sure this ID matches an existing FE
+      type: 'Stop',
+      locationName: 'Jollibee Anabu',
+      address: 'Anabu Kostal, Imus, Cavite',
+      arrivalTime: '02:30 PM',
+      duration: '45 mins',
+    },
+    {
+      id: 2,
+      feId: 1,
+      type: 'Moving',
+      locationName: 'Driving along Aguinaldo Hwy',
+      address: 'Near Lumina Point Mall',
+      arrivalTime: '02:15 PM',
+      duration: '15 mins',
+    },
+    {
+      id: 3,
+      feId: 1,
+      type: 'Stop',
+      locationName: 'Petron Gas Station',
+      address: 'Centennial Rd, Kawit',
+      arrivalTime: '01:55 PM',
+      duration: '20 mins',
+    },
+    {
+      id: 4,
+      feId: 2, // History for a different FE
+      type: 'Stop',
+      locationName: 'SM City Bacoor',
+      address: 'Tirona Hwy, Bacoor, Cavite',
+      arrivalTime: '03:10 PM',
+      duration: '35 mins',
+    }
+  ];
+
   // Fetch field engineers from API
   const fetchFieldEngineersData = async () => {
     try {
@@ -142,68 +182,82 @@ function HomePage() {
   }
 };
 
-  const handleAcceptServiceRequest = async (sr: ServiceRequest, fe: FieldEngineer) => {
+const handleAcceptServiceRequest = async (sr: ServiceRequest, fe: FieldEngineer) => {
   try {
+    // The ONLY thing this function does now is call the API.
+    // The backend will handle the rest and notify all clients via SignalR.
     await apiAcceptServiceRequest(sr.id, fe.id);
-    
-    // Create a new route when a service request is accepted
-    const branch = branches.find(b => b._id === sr.branchId);
-    if (!branch) {
-      console.error("Branch not found for service request:", sr);
-      return;
-    }
-    
-    // Get branch index
-    const branchIndex = branches.findIndex(b => b._id === sr.branchId);
-    
-    // Calculate start time as now
-    const startTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    
-    // Create new route object
-    const newRoute: OngoingRoute = {
-      id: Date.now(), 
-      feId: fe.id,
-      feName: fe.name,
-      branchId: branchIndex >= 0 ? branchIndex : 0,
-      branchName: branch.name,
-      startTime,
-      estimatedArrival: "Calculating...",
-      distance: "Calculating...",
-      duration: "Calculating...",
-      price: "₱0",
-      status: "in-progress",
-      routeSteps: []
-    };
-    
-    // Add the new route to existing routes
-    setOngoingRoutes(prev => [...prev, newRoute]);
-    
-    // Get the route from Mapbox and start navigation
-    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${fe.lng},${fe.lat};${branch.lng},${branch.lat}?steps=true&geometries=geojson&access_token=${mapboxgl.accessToken}`;
-    
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
-      const routeData = data.routes[0];
-      const coordinates = routeData.geometry.coordinates;
-      
-      // Start the field engineer navigation along the polyline
-      console.log(`Starting navigation for ${fe.name} with ${coordinates.length} coordinates`);
-      await startFieldEngineerNavigation(fe.id, fe.name, coordinates);
-      
-      // Update route info with calculated data
-      updateRouteInfo(newRoute);
-    } else {
-      console.error('Failed to get route from Mapbox:', data);
-    }
-    
-    await fetchServiceRequestsData();
-    await fetchFieldEngineersData();
+
+    // All other logic (creating new route, calling updateRouteInfo, etc.)
+    // has been removed from here because it's now handled by the 'newRoute' useEffect.
+
   } catch (err) {
     console.error('Error accepting service request:', err);
   }
 };
+
+//   const handleAcceptServiceRequest = async (sr: ServiceRequest, fe: FieldEngineer) => {
+//   try {
+//     await apiAcceptServiceRequest(sr.id, fe.id);
+    
+//     // Create a new route when a service request is accepted
+//     const branch = branches.find(b => b._id === sr.branchId);
+//     if (!branch) {
+//       console.error("Branch not found for service request:", sr);
+//       return;
+//     }
+    
+//     // Get branch index
+//     const branchIndex = branches.findIndex(b => b._id === sr.branchId);
+    
+//     // Calculate start time as now
+//     const startTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    
+//     // Create new route object
+//     const newRoute: OngoingRoute = {
+//       id: Date.now(), 
+//       feId: fe.id,
+//       feName: fe.name,
+//       branchId: branchIndex >= 0 ? branchIndex : 0,
+//       branchName: branch.name,
+//       startTime,
+//       estimatedArrival: "Calculating...",
+//       distance: "Calculating...",
+//       duration: "Calculating...",
+//       price: "₱0",
+//       status: "in-progress",
+//       routeSteps: []
+//     };
+    
+//     // Add the new route to existing routes
+//     setOngoingRoutes(prev => [...prev, newRoute]);
+    
+//     // Get the route from Mapbox and start navigation
+//     const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${fe.lng},${fe.lat};${branch.lng},${branch.lat}?steps=true&geometries=geojson&access_token=${mapboxgl.accessToken}`;
+    
+//     const response = await fetch(url);
+//     const data = await response.json();
+    
+//     if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+//       const routeData = data.routes[0];
+//       const coordinates = routeData.geometry.coordinates;
+      
+//       // Start the field engineer navigation along the polyline
+//       console.log(`Starting navigation for ${fe.name} with ${coordinates.length} coordinates`);
+//       await startFieldEngineerNavigation(fe.id, fe.name, coordinates);
+      
+//       // Update route info with calculated data
+//       updateRouteInfo(newRoute);
+//     } else {
+//       console.error('Failed to get route from Mapbox:', data);
+//     }
+    
+//     await fetchServiceRequestsData();
+//     await fetchFieldEngineersData();
+//   } catch (err) {
+//     console.error('Error accepting service request:', err);
+//   }
+// };
 
 // Add a function to stop navigation if needed
 const handleStopNavigation = async (feId: number) => {
@@ -228,7 +282,8 @@ const formatDistance = (distanceInMeters: number): string =>{
   try {
     // Get the most current data
     const currentFE = fieldEngineers.find(fe => fe.id === route.feId);
-    const currentBranch = branches[route.branchId];
+    // FIX: Find the branch by its _id, comparing it to the route's branchId.
+    const currentBranch = branches.find(b => b._id === route.branchId.toString());
 
     if (!currentFE || !currentBranch) {
       console.error('Could not find field engineer or branch for route:', route);
@@ -352,6 +407,33 @@ const getManeuverDescription = (type: string, modifier?: string): string => {
       return type.charAt(0).toUpperCase() + type.slice(1);
   }
 };
+
+//Toast for completed route
+useEffect(() => {
+  const handleRouteCompleted = (completedSr: ServiceRequest) => {
+    let completedRoute: OngoingRoute | undefined;
+
+    // Remove the route from the state and get its details for the toast
+    setOngoingRoutes(prev => {
+      const routeToRemove = prev.find(route => route.branchId === Number(completedSr.branchId));
+      completedRoute = routeToRemove;
+      return prev.filter(route => route.branchId !== Number(completedSr.branchId));
+    });
+
+    if (completedRoute) {
+      toast.success(`✅ Route Complete: ${completedRoute.feName} has arrived at ${completedRoute.branchName}!`);
+    }
+
+    // Optional: Refresh service requests to show the new "completed" status if you have a history view
+    fetchServiceRequestsData();
+  };
+
+  subscribe('routeCompleted', handleRouteCompleted);
+
+  return () => {
+    unsubscribe('routeCompleted', handleRouteCompleted);
+  };
+}, [branches]);
 
 // Add this useEffect to handle branch updates
 useEffect(() => {
@@ -771,20 +853,20 @@ useEffect(() => {
   }, [serviceRequests]);
 
 const handleShowRoute = async (route: OngoingRoute) => {
-  // Clear the previous route from the map
-  clearRouteFromMap();
 
-  // Update the selected route state
-  setSelectedRoute(route);
+  clearRouteFromMap();
+  setSelectedRoute(route); 
   setShowRouteOnMap(true);
 
   const fe = fieldEngineers.find(fe => fe.id === route.feId);
-  const branch = branches[route.branchId];
+
+  const branch = branches.find(b => b._id === route.branchId.toString());
 
   if (fe && branch && map.current) {
+    console.log(`CORRECTLY showing route to: ${branch.name}`);
     console.log(`Showing route from FE (${fe.lat}, ${fe.lng}) to branch (${branch.lat}, ${branch.lng})`);
 
-    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${fe.lng},${fe.lat};${branch.lng},${branch.lat}?geometries=geojson&access_token=${mapboxgl.accessToken}`;
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${fe.lng},${fe.lat};${branch.lng},${branch.lat}?steps=true&geometries=geojson&access_token=${mapboxgl.accessToken}`;
     try {
       const response = await fetch(url);
       const data = await response.json();
@@ -794,7 +876,7 @@ const handleShowRoute = async (route: OngoingRoute) => {
       }
       const routeGeo = data.routes[0].geometry;
 
-      // Add route to map
+      // Add route to map (your existing logic here is correct)
       map.current.addSource(routeLayerId, {
         type: 'geojson',
         data: {
@@ -816,11 +898,10 @@ const handleShowRoute = async (route: OngoingRoute) => {
           'line-color': route.status === 'delayed' ? '#FF6B6B' : route.status === 'arriving' ? '#4CAF50' : '#3887BE',
           'line-width': 4,
           'line-opacity': 0.8,
-          'line-dasharray': route.status === 'delayed' ? [2, 1] : [1],
         },
       });
 
-      // Fit map to the route
+      // Fit map to the route (your existing logic here is correct)
       const coordinates = routeGeo.coordinates;
       const bounds = coordinates.reduce(
         (b: mapboxgl.LngLatBounds, coord: [number, number]) => b.extend(coord),
@@ -837,14 +918,14 @@ const handleShowRoute = async (route: OngoingRoute) => {
       console.error('Error fetching route from Mapbox Directions API:', err);
     }
   } else {
+    // Improved error logging
     console.error('Missing data for route display:', {
-      fe: fe ? `Found FE ${fe.name}` : 'FE not found',
-      branch: branch ? `Found branch ${branch.name}` : 'Branch not found',
+      fe: fe ? `Found FE ${fe.name}` : `FE with ID ${route.feId} not found`,
+      branch: branch ? `Found branch ${branch.name}` : `Branch with ID ${route.branchId} not found`,
       map: map.current ? 'Map exists' : 'Map not initialized',
     });
   }
 };
-
   // Function to clear route from map
   const clearRouteFromMap = () => {
   if (map.current && map.current.getLayer(routeLayerId)) {
@@ -1043,11 +1124,24 @@ useEffect(() => {
 
   // Subscribe to field engineer updates
   useEffect(() => {
-    const handleFieldEngineerUpdate = (fe: FieldEngineer) => {
+    const handleFieldEngineerUpdate = (fe: any) => { // Changed type to any to handle backend model
+      console.log('Real-time FE update received:', fe);
+
+      // FIX: Transform the incoming backend data to match the frontend's FieldEngineer type
+      const transformedFE: FieldEngineer = {
+        id: fe.id,
+        name: fe.name,
+        lat: fe.currentLatitude,  // Use currentLatitude
+        lng: fe.currentLongitude, // Use currentLongitude
+        status: fe.status,
+        fcmToken: fe.fcmToken || '',
+        lastUpdated: fe.updatedAt,
+      };
+
       // Update a single field engineer in the state
       setFieldEngineers(prev => 
         prev.map(engineer => 
-          engineer.id === fe.id ? { ...engineer, ...fe } : engineer
+          engineer.id === transformedFE.id ? transformedFE : engineer
         )
       );
     };
@@ -1062,29 +1156,12 @@ useEffect(() => {
   // Subscribe to service request updates
   useEffect(() => {
   const handleServiceRequestUpdate = (sr: ServiceRequest) => {
-    console.log('Service Request Update received:', sr);
+    console.log('Service Request Update received via SignalR:', sr);
+
 
     setServiceRequests(prev =>
-      prev.filter(request => request.id !== sr.id) // Remove the updated request from the list
+      prev.filter(request => request.id !== sr.id)
     );
-
-    if (sr.status === 'accepted') {
-      const newRoute: OngoingRoute = {
-        id: Date.now(),
-        feId: sr.acceptedByFeId!,
-        feName: sr.acceptedByFeName!,
-        branchId: parseInt(sr.branchId),
-        branchName: sr.branchName,
-        status: 'in-progress',
-        estimatedArrival: sr.currentRadiusKm ? `${Math.round(sr.currentRadiusKm * 4)} mins` : 'Calculating...', 
-        distance: sr.currentRadiusKm ? `${sr.currentRadiusKm} km` : 'Calculating...',
-        duration: sr.currentRadiusKm ? `${Math.round(sr.currentRadiusKm * 4)} mins` : 'Calculating...', // Assuming avg speed 15km/h
-        price: sr.currentRadiusKm ? `$${(sr.currentRadiusKm * 50).toFixed(2)}` : 'Calculating...', 
-        routeSteps: [],
-        startTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      setOngoingRoutes(prev => [...prev, newRoute]);
-    }
   };
 
   subscribe('serviceRequestUpdate', handleServiceRequestUpdate);
@@ -1094,25 +1171,50 @@ useEffect(() => {
   };
 }, []);
   // Subscribe to route updates
-  useEffect(() => {
-    const handleNewRoute = (route: OngoingRoute) => {
-      setOngoingRoutes(prev => [...prev, route]);
+   useEffect(() => {
+    const handleNewRoute = (route: any) => { // 'route' now comes from the backend
+      console.log("Received new route from backend:", route);
+
+      // Add a check to prevent crash if route or branchId is missing
+      if (!route || typeof route.branchId === 'undefined') {
+        console.error("Received an invalid route object from the backend:", route);
+        return; // Stop execution to prevent a crash
+      }
+
+      // The backend sends a C# object, we need to map it to our TypeScript OngoingRoute
+      const newOngoingRoute: OngoingRoute = {
+        id: route.id,
+        feId: route.feId,
+        feName: route.feName,
+        branchId: route.branchId,
+        branchName: route.branchName,
+        startTime: route.startTime,
+        estimatedArrival: route.estimatedArrival,
+        distance: route.distance,
+        duration: route.duration,
+        price: route.price,
+        status: route.status,
+        routeSteps: route.routeSteps || []
+      };
+      setOngoingRoutes(prev => [...prev, newOngoingRoute]);
+      updateRouteInfo(newOngoingRoute); 
+      //startFieldEngineerNavigation(route.feId, route.feName, [ [route.feLng, route.feLat], [route.branchLng, route.branchLat] ]);
     };
-    
+
     const handleRouteUpdate = (route: OngoingRoute) => {
       setOngoingRoutes(prev => 
         prev.map(r => r.id === route.id ? { ...r, ...route } : r)
       );
     };
-    
+
     subscribe('newRoute', handleNewRoute);
     subscribe('routeUpdate', handleRouteUpdate);
-    
+
     return () => {
       unsubscribe('newRoute', handleNewRoute);
       unsubscribe('routeUpdate', handleRouteUpdate);
     };
-  }, []);
+  }, [branches, fieldEngineers]);
 
   // Initial data fetch on component mount
   useEffect(() => {
@@ -1124,8 +1226,81 @@ useEffect(() => {
     // Remove polling intervals since we're using sockets now
     // (The old polling code can be removed)
   }, []);
-  
 
+
+  const LocationHistoryPanel = ({ fieldEngineers, historyData }: { fieldEngineers: FieldEngineer[], historyData: typeof sampleLocationHistory }) => {
+  const [selectedFeId, setSelectedFeId] = useState(fieldEngineers[0]?.id || 0);
+
+  const filteredHistory = historyData.filter(h => h.feId === selectedFeId);
+
+  return (
+    <div className="bg-[#6b6f1d]/90 backdrop-blur-sm shadow-md rounded-xl p-4">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-white font-medium">Field Engineer Activity Log</h3>
+        <select
+          className="select select-sm bg-white/20 text-white border-white/30"
+          value={selectedFeId}
+          onChange={(e) => setSelectedFeId(Number(e.target.value))}
+        >
+          {fieldEngineers.map(fe => (
+            <option key={fe.id} value={fe.id} className="text-black">
+              {fe.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {filteredHistory.length === 0 ? (
+        <div className="bg-white/10 rounded-lg p-4 text-center text-white/70">
+          No activity data available for this engineer.
+        </div>
+      ) : (
+        <div className="space-y-3 max-h-64 overflow-y-auto pr-2">
+          {filteredHistory.map((item) => (
+            <div key={item.id} className="flex items-center gap-4 bg-black/20 p-3 rounded-lg">
+              {/* Icon */}
+              <div className={`w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center ${
+                item.type === 'Stop' ? 'bg-orange-500/80' : 'bg-green-500/80'
+              }`}>
+                {item.type === 'Stop' ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 text-white">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 text-white">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                  </svg>
+                )}
+              </div>
+              
+              {/* Details */}
+              <div className="flex-grow">
+                <div className="font-medium text-white">{item.locationName}</div>
+                <div className="text-xs text-white/70">{item.address}</div>
+              </div>
+
+              {/* Time and Duration */}
+              <div className="text-right flex-shrink-0">
+                <div className="text-sm font-bold text-white">{item.arrivalTime}</div>
+                <div className={`text-xs px-2 py-0.5 rounded-full mt-1 ${
+                  item.type === 'Stop' ? 'bg-orange-400/30 text-orange-200' : 'bg-green-400/30 text-green-200'
+                }`}>
+                  {item.duration}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+
+  
+  //Main return
   // Add a small connection indicator in your UI
   return (
     <div className="h-screen flex overflow-hidden bg-[#c8c87e]">
@@ -1466,6 +1641,11 @@ useEffect(() => {
     )}
                 </div>
 </div>
+
+
+
+{/* !!! ADD THE NEW PANEL HERE !!! */}
+      <LocationHistoryPanel fieldEngineers={fieldEngineers} historyData={sampleLocationHistory} />
 
 
 {/* Service requests card */}
