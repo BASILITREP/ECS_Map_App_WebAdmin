@@ -51,3 +51,19 @@ export interface OngoingRoute {
   routeSteps?: RouteStep[];
   status: 'in-progress' | 'delayed' | 'arriving';
 }
+
+export interface ActivityHistory {
+  id: number;
+  feId: number;
+  type: 'drive' | 'stop';
+  distance?: string;
+  timeRange: string;
+  duration: string;
+  topSpeed?: string;
+  riskyEvents?: number;
+  locationName?: string;
+  address?: string;
+  mapImage: string;
+  lat?: number;
+  lng?: number;
+}

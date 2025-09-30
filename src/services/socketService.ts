@@ -21,7 +21,9 @@ const eventHandlers: {
   connected: [],
   disconnected: [],
   error: [],
-  CoordinateUpdate: [], // Add this line
+  CoordinateUpdate: [],
+  routeCompleted:[],
+  
 };
 
 // SignalR connection
@@ -48,6 +50,7 @@ export const initializeSocket = async (): Promise<void> => {
   });
 
   connection.on('ReceiveServiceRequestUpdate', (data: ServiceRequest) => {
+    console.log('Service request update received via SignalR:', data);
     notifyEventHandlers('serviceRequestUpdate', data);
   });
 
@@ -106,6 +109,10 @@ connection.on('ReceiveNewBranch', (data: Branch) => {
     console.log('SignalR disconnected');
     notifyEventHandlers('disconnected', null);
   });
+
+  connection.on('ReceiveRouteCompleted', (data: ServiceRequest) => {
+  notifyEventHandlers('routeCompleted', data);
+});
 
   // Add better error handling
   connection.onclose((error) => {
