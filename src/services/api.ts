@@ -1,4 +1,5 @@
-import type { Branch, FieldEngineer, ServiceRequest } from '../types';
+import type { Branch, FieldEngineer, ServiceRequest, ActivityHistory } from '../types';
+import image from '../assets/History.png';
 import { isConnected } from './socketService';
 
 // Use environment variable for API URL with fallback
@@ -181,4 +182,42 @@ export const stopFieldEngineerNavigation = async (fieldEngineerId: number) => {
   });
   
   return await handleResponse(response);
+};
+
+export const fetchActivityHistory = async (fieldEngineerId: number): Promise<ActivityHistory[]> => {
+  const response = await fetch(`${API_URL}/FieldEngineer/${fieldEngineerId}/activity`);
+  const data = await handleResponse(response);
+  
+  // Transform the backend data to match the frontend component's expected structure
+  return data.map((event: any) => {
+    const startTime = new Date(event.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const endTime = new Date(event.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    if (event.type === 1) { // 1 corresponds to the 'Drive' enum in C#
+      return {
+        id: event.id,
+        feId: event.fieldEngineerId,
+        type: 'drive',
+        distance: `${event.distanceKm.toFixed(1)} km`,
+        timeRange: `${startTime} - ${endTime}`,
+        duration: `${event.durationMinutes} min`,
+        topSpeed: `${event.topSpeedKmh.toFixed(0)} km/h`,
+        riskyEvents: 0, // Placeholder
+        mapImage: image,
+      };
+    } else { // 0 corresponds to the 'Stop' enum
+      return {
+        id: event.id,
+        feId: event.fieldEngineerId,
+        type: 'stop',
+        locationName: event.locationName,
+        address: event.address,
+        timeRange: `${startTime} - ${endTime}`,
+        duration: `${event.durationMinutes} min`,
+        mapImage: image,
+        lat: event.latitude,
+        lng: event.longitude,
+      };
+    }
+  });
 };
