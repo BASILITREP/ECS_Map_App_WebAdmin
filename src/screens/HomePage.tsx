@@ -8,6 +8,9 @@ import OngoingRoutesPanel from "../screens/HomePage/OngoingRoutes";
 import ServiceRequests from "../screens/HomePage/ServiceRequest";
 
 
+import {type Trip} from "../types"; 
+
+
 import type {
   Branch,
   FieldEngineer,
@@ -29,6 +32,7 @@ import {
   fetchActivityHistory,
   createServiceRequest as apiCreateServiceRequest,
   acceptServiceRequest as apiAcceptServiceRequest,
+  fetchTrips, // <-- Import fetchTrips
 } from "../services/api";
 import {
   initializeSocket,
@@ -61,8 +65,12 @@ function HomePage() {
   const [serviceRequests, setServiceRequests] = useState<ServiceRequest[]>([]);
   const [socketConnected, setSocketConnected] = useState<boolean>(false);
   const [showMapFilter, setShowMapFilter] = useState(true);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false); // Add sidebar state
-  const [searchQuery, setSearchQuery] = useState<string>(""); // Add search state
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false); 
+  const [searchQuery, setSearchQuery] = useState<string>(""); 
+  const [followBoss, setFollowBoss] = useState<boolean>(true);
+  const [selectedEngineer, setSelectedEngineer] = useState<FieldEngineer | null>(null); 
+  const [trips, setTrips] = useState<Trip[]>([]); 
+  const [isHistoryLoading, setIsHistoryLoading] = useState<boolean>(false); 
   const srLayers = useRef<Set<string>>(new Set());
   const routeLayerId = "active-route-layer";
 
@@ -73,6 +81,73 @@ function HomePage() {
       branch.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       branch.location.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Add this new component inside HomePage.tsx
+  const TripPolylineMap = ({ start, end }: { start: { lat: number, lng: number }, end: { lat: number, lng: number } }) => {
+    const mapContainerRef = useRef<HTMLDivElement>(null);
+    const mapRef = useRef<mapboxgl.Map | null>(null);
+
+    useEffect(() => {
+      if (mapRef.current || !mapContainerRef.current) return;
+
+      const map = new mapboxgl.Map({
+        container: mapContainerRef.current,
+        style: "mapbox://styles/mapbox/light-v11", // A simpler style for mini-maps
+        interactive: false,
+      });
+      mapRef.current = map;
+
+      map.on("load", () => {
+        const bounds = new mapboxgl.LngLatBounds();
+        bounds.extend([start.lng, start.lat]);
+        bounds.extend([end.lng, end.lat]);
+        map.fitBounds(bounds, { padding: 20, duration: 0 });
+
+        // Add start and end markers
+        new mapboxgl.Marker({ color: '#4CAF50' }) // Green for start
+          .setLngLat([start.lng, start.lat])
+          .addTo(map);
+        new mapboxgl.Marker({ color: '#F44336' }) // Red for end
+          .setLngLat([end.lng, end.lat])
+          .addTo(map);
+
+        // Add the polyline
+        map.addSource('route', {
+          'type': 'geojson',
+          'data': {
+            'type': 'Feature',
+            'properties': {},
+            'geometry': {
+              'type': 'LineString',
+              'coordinates': [[start.lng, start.lat], [end.lng, end.lat]]
+            }
+          }
+        });
+        map.addLayer({
+          'id': 'route',
+          'type': 'line',
+          'source': 'route',
+          'layout': {
+            'line-join': 'round',
+            'line-cap': 'round'
+          },
+          'paint': {
+            'line-color': '#3887BE',
+            'line-width': 3
+          }
+        });
+      });
+
+      return () => {
+        map.remove();
+        mapRef.current = null;
+      };
+    }, [start, end]);
+
+    return (
+      <div ref={mapContainerRef} className="mt-3 rounded-lg w-full h-24" />
+    );
+  };
 
   // circle radius in SR
   const makeCircle = (
@@ -109,44 +184,83 @@ function HomePage() {
     };
   };
 
-  const sampleLocationHistory = [
-    {
-      id: 1,
-      feId: 1, // Make sure this ID matches an existing FE
-      type: "Stop",
-      locationName: "Jollibee Anabu",
-      address: "Anabu Kostal, Imus, Cavite",
-      arrivalTime: "02:30 PM",
-      duration: "45 mins",
+  // Fetch trip history for selected engineer
+  const handleShowHistory = async (engineer: FieldEngineer) => {
+    setSelectedEngineer(engineer);
+    setIsHistoryLoading(true);
+    const fetchedTrips = await fetchTrips(engineer.id);
+    setTrips(fetchedTrips);
+    setIsHistoryLoading(false);
+  };
+
+  // --- 4. Create a function to draw the trip on the map ---
+const drawTripOnMap = (trip: Trip) => {
+  if (!map.current) return;
+
+  const mapInstance = map.current;
+  if (mapInstance.getLayer('trip-route')) {
+    mapInstance.removeLayer('trip-route');
+  }
+  if (mapInstance.getSource('trip-route')) {
+    mapInstance.removeSource('trip-route');
+  }
+  const routeId = `trip-route-${trip.id}`;
+  const pointsId = `trip-points-${trip.id}`;
+
+  // Remove existing trip layers to avoid clutter
+  if (mapInstance.getLayer(routeId)) mapInstance.removeLayer(routeId);
+  if (mapInstance.getSource(routeId)) mapInstance.removeSource(routeId);
+  if (mapInstance.getLayer(pointsId)) mapInstance.removeLayer(pointsId);
+  if (mapInstance.getSource(pointsId)) mapInstance.removeSource(pointsId);
+  
+  const geojson: GeoJSON.FeatureCollection = {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'LineString',
+          coordinates: trip.path.map(p => [p.longitude, p.latitude])
+        }
+      }
+    ]
+  };
+
+  mapInstance.addSource(routeId, {
+    type: 'geojson',
+    data: geojson
+  });
+
+  mapInstance.addLayer({
+    id: routeId,
+    type: 'line',
+    source: routeId,
+    layout: {
+      'line-join': 'round',
+      'line-cap': 'round'
     },
-    {
-      id: 2,
-      feId: 1,
-      type: "Moving",
-      locationName: "Driving along Aguinaldo Hwy",
-      address: "Near Lumina Point Mall",
-      arrivalTime: "02:15 PM",
-      duration: "15 mins",
-    },
-    {
-      id: 3,
-      feId: 1,
-      type: "Stop",
-      locationName: "Petron Gas Station",
-      address: "Centennial Rd, Kawit",
-      arrivalTime: "01:55 PM",
-      duration: "20 mins",
-    },
-    {
-      id: 4,
-      feId: 2, // History for a different FE
-      type: "Stop",
-      locationName: "SM City Bacoor",
-      address: "Tirona Hwy, Bacoor, Cavite",
-      arrivalTime: "03:10 PM",
-      duration: "35 mins",
-    },
-  ];
+    paint: {
+      'line-color': '#3887be',
+      'line-width': 5,
+      'line-opacity': 0.75
+    }
+  });
+
+  // Fit map to the trip bounds
+  const coordinates = trip.path.map(p => [p.longitude, p.latitude] as [number, number]);
+  if(coordinates.length > 0) {
+    const bounds = coordinates.reduce((bounds, coord) => {
+        return bounds.extend(coord);
+    }, new mapboxgl.LngLatBounds(coordinates[0], coordinates[0]));
+
+    mapInstance.fitBounds(bounds, {
+        padding: 40
+    });
+  }
+};
+
+  
 
   // Fetch field engineers from API
   const fetchFieldEngineersData = async () => {
@@ -510,125 +624,122 @@ function HomePage() {
   // Replace the existing handleBossCoordinates useEffect with this:
 
   useEffect(() => {
-    const handleBossCoordinates = (data: any) => {
-      console.log("Boss coordinates received:", data);
+  const handleBossCoordinates = (data: any) => {
+    console.log("Boss coordinates received:", data);
 
-      if (!map.current || !data.latitude || !data.longitude) return;
+    if (!map.current || !data.latitude || !data.longitude) return;
 
-      const bossMarkerId = "boss-marker";
-      const color = "#ff4444"; // Red color for boss
+    const bossMarkerId = "boss-marker";
+    const color = "#00ff00"; // green color for boss
 
-      if (markers.current[bossMarkerId]) {
-        // Update existing marker position and make visible
-        markers.current[bossMarkerId].setLngLat([
-          data.longitude,
-          data.latitude,
-        ]);
-        markers.current[bossMarkerId].getElement().style.display = "block";
+    if (markers.current[bossMarkerId]) {
+      // Update existing marker position and make visible
+      markers.current[bossMarkerId].setLngLat([data.longitude, data.latitude]);
+      markers.current[bossMarkerId].getElement().style.display = "block";
 
-        // Update marker color (in case it changes)
-        const markerElement = markers.current[bossMarkerId].getElement();
-        markerElement.style.backgroundColor = color;
+      // Update marker color (in case it changes)
+      const markerElement = markers.current[bossMarkerId].getElement();
+      markerElement.style.backgroundColor = color;
 
-        // Update popup content
-        const timeString = new Date(data.timestamp).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-
-        const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(`
-          <div style="padding: 10px; text-align: center;">
-            <strong style="color: #ff4444;">👑 Boss Location</strong><br/>
-            <span style="color: #666; font-size: 12px;">${
-              data.description || "Boss is here"
-            }</span><br/>
-            <span style="color: #888; font-size: 11px;">
-              Updated: ${timeString}
-            </span><br/>
-            <span style="color: #999; font-size: 10px;">
-              ${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}
-            </span>
-          </div>
-        `);
-
-        markers.current[bossMarkerId].setPopup(popup);
-      } else {
-        // Create a new boss marker
-        const el = document.createElement("div");
-        el.className = "boss-marker";
-        el.style.width = "25px";
-        el.style.height = "25px";
-        el.style.backgroundColor = color;
-        el.style.border = "3px solid white";
-        el.style.borderRadius = "50%";
-        el.style.boxShadow = "0 0 15px rgba(255, 68, 68, 0.8)";
-        el.style.cursor = "pointer";
-        el.style.display = "flex";
-        el.style.alignItems = "center";
-        el.style.justifyContent = "center";
-        el.style.fontSize = "12px";
-        el.innerHTML = "👑"; // Crown for boss
-
-        // Add animation ping effect (same as field engineers)
-        const ping = document.createElement("div");
-        ping.style.width = "100%";
-        ping.style.height = "100%";
-        ping.style.borderRadius = "50%";
-        ping.style.backgroundColor = `${color}80`; // Add transparency
-        ping.style.animation = "ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite";
-        ping.style.position = "absolute";
-        ping.style.top = "0";
-        ping.style.left = "0";
-        ping.style.zIndex = "-1";
-        el.style.position = "relative";
-        el.appendChild(ping);
-
-        // Format the timestamp
-        const timeString = new Date(data.timestamp).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-
-        // Add a popup
-        const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(`
-          <div style="padding: 10px; text-align: center;">
-            <strong style="color: #ff4444;">👑 Boss Location</strong><br/>
-            <span style="color: #666; font-size: 12px;">${
-              data.description || "Boss is here"
-            }</span><br/>
-            <span style="color: #888; font-size: 11px;">
-              Updated: ${timeString}
-            </span><br/>
-            <span style="color: #999; font-size: 10px;">
-              ${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}
-            </span>
-          </div>
-        `);
-
-        // Create and store the marker
-        const marker = new mapboxgl.Marker(el)
-          .setLngLat([data.longitude, data.latitude])
-          .setPopup(popup)
-          .addTo(map.current);
-
-        markers.current[bossMarkerId] = marker;
-      }
-
-      // Fly to boss location with animation (keep this part)
-      map.current.flyTo({
-        center: [data.longitude, data.latitude],
-        zoom: 15,
-        duration: 2000,
+      // Update popup content
+      const timeString = new Date(data.timestamp).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
       });
-    };
 
-    // Subscribe to boss coordinate updates
-    subscribe("CoordinateUpdate", handleBossCoordinates);
+      const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(`
+        <div style="padding: 10px; text-align: center;">
+          <strong style="color: #00ff00;">👑 Boss Location</strong><br/>
+          <span style="color: #666; font-size: 12px;">${
+            data.description || "Boss is here"
+          }</span><br/>
+          <span style="color: #888; font-size: 11px;">
+            Updated: ${timeString}
+          </span><br/>
+          <span style="color: #999; font-size: 10px;">
+            ${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}
+          </span>
+        </div>
+      `);
 
-    return () => {
-      unsubscribe("CoordinateUpdate", handleBossCoordinates);
-    };
-  }, []);
+      markers.current[bossMarkerId].setPopup(popup);
+    } else {
+      // Create a new boss marker
+      const el = document.createElement("div");
+      el.className = "boss-marker";
+      el.style.width = "25px";
+      el.style.height = "25px";
+      el.style.backgroundColor = color;
+      el.style.border = "3px solid white";
+      el.style.borderRadius = "50%";
+      el.style.boxShadow = "0 0 15px rgba(255, 68, 68, 0.8)";
+      el.style.cursor = "pointer";
+      el.style.display = "flex";
+      el.style.alignItems = "center";
+      el.style.justifyContent = "center";
+      el.style.fontSize = "12px";
+      el.innerHTML = "👑"; // Crown for boss
+
+      // Add animation ping effect (same as field engineers)
+      const ping = document.createElement("div");
+      ping.style.width = "100%";
+      ping.style.height = "100%";
+      ping.style.borderRadius = "50%";
+      ping.style.backgroundColor = `${color}80`; // Add transparency
+      ping.style.animation = "ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite";
+      ping.style.position = "absolute";
+      ping.style.top = "0";
+      ping.style.left = "0";
+      ping.style.zIndex = "-1";
+      el.style.position = "relative";
+      el.appendChild(ping);
+
+      // Format the timestamp
+      const timeString = new Date(data.timestamp).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      // Add a popup
+      const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(`
+        <div style="padding: 10px; text-align: center;">
+          <strong style="color: #00ff00;">👑 Boss Location</strong><br/>
+          <span style="color: #666; font-size: 12px;">${
+            data.description || "Boss is here"
+          }</span><br/>
+          <span style="color: #888; font-size: 11px;">
+            Updated: ${timeString}
+          </span><br/>
+          <span style="color: #999; font-size: 10px;">
+            ${data.latitude.toFixed(6)}, ${data.longitude.toFixed(6)}
+          </span>
+        </div>
+      `);
+
+      // Create and store the marker
+      const marker = new mapboxgl.Marker(el)
+        .setLngLat([data.longitude, data.latitude])
+        .setPopup(popup)
+        .addTo(map.current);
+
+      markers.current[bossMarkerId] = marker;
+    }
+
+    // Remove this block to stop focusing the camera
+    // map.current.flyTo({
+    //   center: [data.longitude, data.latitude],
+    //   zoom: 15,
+    //   duration: 2000,
+    // });
+  };
+
+  // Subscribe to boss coordinate updates
+  subscribe("CoordinateUpdate", handleBossCoordinates);
+
+  return () => {
+    unsubscribe("CoordinateUpdate", handleBossCoordinates);
+  };
+}, []);
 
   useEffect(() => {
     const handleNewFieldEngineer = (fe: any) => {
@@ -710,8 +821,7 @@ function HomePage() {
   }, []);
 
   useEffect(() => {
-    mapboxgl.accessToken =
-      "pk.eyJ1IjoiYmFzaWwxLTIzIiwiYSI6ImNtZWFvNW43ZTA0ejQycHBtd3dkMHJ1bnkifQ.Y-IlM-vQAlaGr7pVQnug3Q";
+    mapboxgl.accessToken ="pk.eyJ1IjoiYmFzaWwxLTIzIiwiYSI6ImNtZWFvNW43ZTA0ejQycHBtd3dkMHJ1bnkifQ.Y-IlM-vQAlaGr7pVQnug3Q";
 
     if (mapContainer.current && !map.current) {
       map.current = new mapboxgl.Map({
@@ -985,86 +1095,92 @@ function HomePage() {
     filteredEngineers.forEach((engineer) => {
       // Status color mapping
       const statusColors = {
-        Active: "#4CAF50", // Green
+        Online: "#4CAF50", // Green
         "On Assignment": "#FFA500", // Orange
         Inactive: "#9E9E9E", // Grey
       };
 
       const color =
-        statusColors[engineer.status as keyof typeof statusColors] || "#ff4d4f";
+      statusColors[engineer.status as keyof typeof statusColors] || "#ff4d4f";
 
-      if (markers.current[engineer.id]) {
-        // Update existing marker position and make visible
-        markers.current[engineer.id].setLngLat([engineer.lng, engineer.lat]);
-        markers.current[engineer.id].getElement().style.display = "block";
-
-        // Update marker color
-        const markerElement = markers.current[engineer.id].getElement();
-        markerElement.style.backgroundColor = color;
-
-        // Update popup content
-        const lastUpdated = new Date(engineer.lastUpdated);
-        const timeString = lastUpdated.toLocaleTimeString([], {
+    const createPopupHtml = (fe: FieldEngineer) => `
+      <div style="padding: 8px;">
+        <strong>${fe.name}</strong><br/>
+        <span class="text-xs">Status: ${fe.status}</span><br/>
+        <span class="text-xs">Last Updated: ${new Date(
+          fe.lastUpdated
+        ).toLocaleTimeString([], {
           hour: "2-digit",
           minute: "2-digit",
-        });
+        })}</span><br/>
+        <button id="history-btn-${
+          fe.id
+        }" class="bg-blue-500 text-white text-xs px-2 py-1 rounded mt-2 hover:bg-blue-600">View History</button>
+      </div>
+    `;
 
-        const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(`
-        <div style="padding: 8px;">
-          <strong>${engineer.name}</strong><br/>
-          <span class="text-xs">Status: ${engineer.status}</span><br/>
-          <span class="text-xs">Last Updated: ${timeString}</span>
-        </div>
-      `);
+    if (markers.current[engineer.id]) {
+      // Update existing marker position and make visible
+      markers.current[engineer.id].setLngLat([engineer.lng, engineer.lat]);
+      markers.current[engineer.id].getElement().style.display = "block";
 
-        markers.current[engineer.id].setPopup(popup);
-      } else {
-        // Create a new marker
-        const el = document.createElement("div");
-        el.className = "field-engineer-marker";
-        el.style.width = "20px";
-        el.style.height = "20px";
-        el.style.backgroundColor = color;
-        el.style.border = "2px solid white";
-        el.style.borderRadius = "50%";
-        el.style.boxShadow = "0 0 10px rgba(0, 0, 0, 0.5)";
-        el.style.cursor = "pointer";
+      // Update marker color
+      const markerElement = markers.current[engineer.id].getElement();
+      markerElement.style.backgroundColor = color;
 
-        // Add animation ping effect
-        const ping = document.createElement("div");
-        ping.style.width = "100%";
-        ping.style.height = "100%";
-        ping.style.borderRadius = "50%";
-        ping.style.backgroundColor = `${color}80`; // Add transparency
-        ping.style.animation = "ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite";
-        el.appendChild(ping);
+      // Update popup content
+      const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(
+        createPopupHtml(engineer)
+      );
+      markers.current[engineer.id].setPopup(popup);
+    } else {
+      // Create a new marker
+      const el = document.createElement("div");
+      el.className = "field-engineer-marker";
+      el.style.width = "20px";
+      el.style.height = "20px";
+      el.style.backgroundColor = color;
+      el.style.border = "2px solid white";
+      el.style.borderRadius = "50%";
+      el.style.boxShadow = "0 0 10px rgba(0, 0, 0, 0.5)";
+      el.style.cursor = "pointer";
 
-        // Format the last updated time
-        const lastUpdated = new Date(engineer.lastUpdated);
-        const timeString = lastUpdated.toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
+      // Add animation ping effect
+      const ping = document.createElement("div");
+      ping.style.width = "100%";
+      ping.style.height = "100%";
+      ping.style.borderRadius = "50%";
+      ping.style.backgroundColor = `${color}80`; // Add transparency
+      ping.style.animation = "ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite";
+      el.appendChild(ping);
 
-        // Add a popup
-        const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(`
-        <div style="padding: 8px;">
-          <strong>${engineer.name}</strong><br/>
-          <span class="text-xs">Status: ${engineer.status}</span><br/>
-          <span class="text-xs">Last Updated: ${timeString}</span>
-        </div>
-      `);
+      // Add a popup
+      const popup = new mapboxgl.Popup({ offset: 25 }).setHTML(
+        createPopupHtml(engineer)
+      );
 
-        // Create and store the marker
-        const marker = new mapboxgl.Marker(el)
-          .setLngLat([engineer.lng, engineer.lat])
-          .setPopup(popup)
-          .addTo(map.current!);
+      // Create and store the marker
+      const marker = new mapboxgl.Marker(el)
+        .setLngLat([engineer.lng, engineer.lat])
+        .setPopup(popup)
+        .addTo(map.current!);
 
-        markers.current[engineer.id] = marker;
-      }
-    });
-  }, [fieldEngineers, loading, showFieldEngineers, statusFilter]);
+      markers.current[engineer.id] = marker;
+    }
+    // Add event listener when the popup opens
+    const currentMarker = markers.current[engineer.id];
+    if (currentMarker) {
+      currentMarker.getPopup()?.on("open", () => {
+        const button = document.getElementById(`history-btn-${engineer.id}`);
+        if (button) {
+          button.addEventListener("click", () => {
+            handleShowHistory(engineer);
+          });
+        }
+      });
+    }
+  });
+}, [fieldEngineers, loading, showFieldEngineers, statusFilter]);
 
   // Initialize socket connection
   useEffect(() => {
@@ -1217,8 +1333,8 @@ function HomePage() {
     useEffect(() => {
       if (mapRef.current || !mapContainerRef.current) return; // Initialize map only once
 
-      mapboxgl.accessToken =
-        "pk.eyJ1IjoiYmFzaWwxLTIzIiwiYSI6ImNtZWFvNW43ZTA0ejQycHBtd3dkMHJ1bnkifQ.Y-IlM-vQAlaGr7pVQnug3Q";
+      //.env
+      mapboxgl.accessToken = "pk.eyJ1IjoiYmFzaWwxLTIzIiwiYSI6ImNtZWFvNW43ZTA0ejQycHBtd3dkMHJ1bnkifQ.Y-IlM-vQAlaGr7pVQnug3Q";
 
       const map = new mapboxgl.Map({
         container: mapContainerRef.current,
@@ -1247,7 +1363,7 @@ function HomePage() {
     );
   };
 
-  const LocationHistoryPanel = ({
+   const LocationHistoryPanel = ({
     fieldEngineers,
   }: {
     fieldEngineers: FieldEngineer[];
@@ -1256,20 +1372,29 @@ function HomePage() {
       fieldEngineers[0]?.id || 0
     );
     const [historyData, setHistoryData] = useState<ActivityHistory[]>([]);
+    
+    // State for trip history (moved from TripHistoryPanel)
+    const [trips, setTrips] = useState<Trip[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-    // This useEffect will run whenever the selected engineer changes
+    // This useEffect now loads BOTH activity history and trip history
     useEffect(() => {
       if (selectedFeId > 0) {
         const loadHistory = async () => {
           setIsLoading(true);
           try {
-            const data = await fetchActivityHistory(selectedFeId);
-            setHistoryData(data);
+            // Fetch both sets of data in parallel for speed
+            const [activityData, tripData] = await Promise.all([
+              fetchActivityHistory(selectedFeId),
+              fetchTrips(selectedFeId),
+            ]);
+            setHistoryData(activityData);
+            setTrips(tripData);
           } catch (error) {
-            console.error("Failed to fetch activity history:", error);
-            setHistoryData([]); // Clear data on error
+            console.error("Failed to fetch history data:", error);
+            setHistoryData([]); 
+            setTrips([]); // Clear trips on error too
           } finally {
             setIsLoading(false);
           }
@@ -1278,7 +1403,6 @@ function HomePage() {
       }
     }, [selectedFeId]); // Re-run when selectedFeId changes
 
-    // Function to handle horizontal scrolling with mouse wheel
     const handleWheelScroll = (e: React.WheelEvent) => {
       if (scrollContainerRef.current) {
         scrollContainerRef.current.scrollLeft += e.deltaY;
@@ -1286,17 +1410,18 @@ function HomePage() {
     };
 
     return (
-      <div className="bg-[#6b6f1d]/90 backdrop-blur-sm shadow-md rounded-xl p-4">
+      <div className="bg-[#6b6f1d]/90 backdrop-blur-sm shadow-md rounded-xl p-4 mt-4">
         {/* Header */}
         <div className="flex justify-between items-center mb-4">
           <h3 className="text-white font-medium">
-            Field Engineer Activity Log
+            Field Engineer Activity & Trip Log
           </h3>
           <select
             className="select select-sm bg-white/20 text-white border-white/30"
             value={selectedFeId}
             onChange={(e) => setSelectedFeId(Number(e.target.value))}
           >
+            <option value={0} disabled>Select Engineer</option>
             {fieldEngineers.map((fe) => (
               <option key={fe.id} value={fe.id} className="text-black">
                 {fe.name}
@@ -1305,82 +1430,82 @@ function HomePage() {
           </select>
         </div>
 
-        {/* Horizontal Scrollable Container */}
-        <div
-          ref={scrollContainerRef}
-          onWheel={handleWheelScroll}
-          className="flex overflow-x-auto space-x-4 pb-4 scrollbar-thin scrollbar-thumb-white/30 scrollbar-track-transparent min-h-[220px]"
-        >
-          {isLoading ? (
-            <div className="flex-grow flex items-center justify-center">
-              <span className="loading loading-spinner loading-md text-white"></span>
-            </div>
-          ) : historyData.length === 0 ? (
-            <div className="flex-grow flex items-center justify-center bg-white/10 rounded-lg p-4 text-center text-white/70">
-              No activity data available for this engineer.
-            </div>
-          ) : (
-            historyData.map((item) => (
-              // The card rendering logic is the same as before
+        {/* Combined Content Area */}
+        {isLoading ? (
+          <div className="flex-grow flex items-center justify-center min-h-[220px]">
+            <span className="loading loading-spinner loading-md text-white"></span>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            
+            
+
+            {/* Column 2: Activity Log */}
+            <div className="lg:col-span-3">
+              <h4 className="font-bold text-white mb-2">Activity Timeline</h4>
               <div
-                key={item.id}
-                className="bg-black/20 p-3 rounded-lg w-80 flex-shrink-0"
+                ref={scrollContainerRef}
+                onWheel={handleWheelScroll}
+                className="flex overflow-x-auto space-x-4 pb-4 scrollbar-thin scrollbar-thumb-white/30 scrollbar-track-transparent min-h-[220px]"
               >
-                {/* ... The rest of your card UI from the previous step ... */}
-                {/* Card Header */}
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center ${
-                      item.type === "drive"
-                        ? "bg-blue-500/80"
-                        : "bg-orange-500/80"
-                    }`}
-                  >
-                    {/* ... SVG Icons ... */}
+                {historyData.length === 0 ? (
+                  <div className="flex-grow flex items-center justify-center bg-white/10 rounded-lg p-4 text-center text-white/70">
+                    No activity data available for this engineer.
                   </div>
-                  <div>
-                    <div className="font-bold text-white text-lg">
-                      {item.type === "drive"
-                        ? `${item.distance} Drive`
-                        : item.locationName}
-                    </div>
-                    <div className="text-xs text-white/70">
-                      {item.timeRange} ({item.duration})
-                    </div>
-                  </div>
-                </div>
-
-                {/* Conditional Map/Image Display */}
-                {item.type === "stop" && item.lat && item.lng ? (
-                  <ActivityMapCard lat={item.lat} lng={item.lng} />
                 ) : (
-                  <img
-                    src={item.mapImage}
-                    alt="Map of the route"
-                    className="mt-3 rounded-lg w-full h-24 object-cover"
-                  />
-                )}
+                  historyData.map((item) => (
+                    <div
+                      key={item.id}
+                      className="bg-black/20 p-3 rounded-lg w-80 flex-shrink-0"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={`w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center ${
+                            item.type === "drive"
+                              ? "bg-blue-500/80"
+                              : "bg-orange-500/80"
+                          }`}
+                        >
+                        </div>
+                        <div>
+                          <div className="font-bold text-white text-lg">
+                            {item.type === "drive"
+                              ? `${item.distance} Drive`
+                              : item.locationName}
+                          </div>
+                          <div className="text-xs text-white/70">
+                            {item.timeRange} ({item.duration})
+                          </div>
+                        </div>
+                      </div>
 
-                {/* Drive Details */}
-                {item.type === "drive" && (
-                  <div className="grid grid-cols-2 gap-2 mt-3 text-xs text-white">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-red-400">🚗</span> Top speed:{" "}
-                      <strong>{item.topSpeed}</strong>
+                      {item.type === "stop" && item.lat && item.lng ? (
+                        <ActivityMapCard lat={item.lat} lng={item.lng} />
+                      ) : (
+                        <img
+                          src={item.mapImage}
+                          alt="Map of the route"
+                          className="mt-3 rounded-lg w-full h-24 object-cover"
+                        />
+                      )}
+
+                      {item.type === "drive" && (
+                        <div className="grid grid-cols-2 gap-2 mt-3 text-xs text-white">
+                          <div className="flex items-center gap-1.5">
+                            <span>🚗</span> Top speed: <strong>{item.topSpeed}</strong>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span>✓</span> Crash Detection: <strong>ON</strong>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-green-400">✓</span> Crash Detection:{" "}
-                      <strong>ON</strong>
-                    </div>
-                    {/* <div className="flex items-center gap-1.5 col-span-2">
-                    <span className="text-yellow-400">⚠️</span> Risky events: <strong>{item.riskyEvents > 0 ? `${item.riskyEvents} event(s)` : 'None'}</strong>
-                  </div> */}
-                  </div>
+                  ))
                 )}
               </div>
-            ))
-          )}
-        </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -1455,6 +1580,7 @@ function HomePage() {
           {/* Content below map */}
           <div className="p-4 space-y-4">
             
+
             {/* Ongoing Routes panel */}
             <OngoingRoutesPanel
             ongoingRoutes={ongoingRoutes}

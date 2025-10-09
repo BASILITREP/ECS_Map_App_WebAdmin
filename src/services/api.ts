@@ -1,4 +1,4 @@
-import type { Branch, FieldEngineer, ServiceRequest, ActivityHistory } from '../types';
+import type { Branch, FieldEngineer, ServiceRequest, ActivityHistory, Trip} from '../types';
 import image from '../assets/History.png';
 import { isConnected } from './socketService';
 
@@ -26,8 +26,6 @@ const handleResponse = async (response: Response) => {
 export const fetchBranches = async (): Promise<Branch[]> => {
   const response = await fetch(`${API_URL}/Branches`);
   const data = await handleResponse(response);
-  
-  // Transform the data to match the frontend expected structure
   return data.map((branch: any) => ({
     _id: branch.id.toString(),
     name: branch.name,
@@ -182,6 +180,22 @@ export const stopFieldEngineerNavigation = async (fieldEngineerId: number) => {
   });
   
   return await handleResponse(response);
+};
+
+// Add this new function to fetch trips for a specific engineer
+export const fetchTrips = async (feId: number): Promise<Trip[]> => {
+  try {
+    // CHANGE THE ENDPOINT to match your LocationController:
+    const response = await fetch(`${API_URL}/Location/trips/${feId}`);
+    if (!response.ok) {
+      throw new Error("Failed to fetch trips");
+    }
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Error fetching trips:", error);
+    return [];
+  }
 };
 
 export const fetchActivityHistory = async (fieldEngineerId: number): Promise<ActivityHistory[]> => {

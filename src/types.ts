@@ -67,3 +67,32 @@ export interface ActivityHistory {
   lat?: number;
   lng?: number;
 }
+
+export interface LocationPoint {
+  id: number;
+  latitude: number;
+  longitude: number;
+  speed?: number;
+  timestamp: string;
+  fieldEngineerId: number;
+}
+
+export interface Trip {
+  id: number;
+  fieldEngineerId: number;
+  startTime: string;
+  endTime?: string;
+  startAddress: string;
+  endAddress?: string;
+  distance: number;
+  // ADD THESE NEW FIELDS:
+  startLatitude: number;
+  startLongitude: number;
+  endLatitude: number;
+  endLongitude: number;
+  startLocation: string;
+  endLocation?: string;
+  tripType: string; // "STATIONARY" or "MOVEMENT"
+  totalDistance: number;
+  path: LocationPoint[];
+}

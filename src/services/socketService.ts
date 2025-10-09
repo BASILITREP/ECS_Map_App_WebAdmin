@@ -92,10 +92,7 @@ connection.on('ReceiveNewBranch', (data: Branch) => {
   // Add this new event handler
   connection.on('CoordinateUpdate', (data: any) => {
     console.log('Boss coordinates received:', data);
-    toast.success(`Boss location updated: ${data.description}`, {
-      position: "top-right",
-      autoClose: 3000,
-    });
+    
     notifyEventHandlers('CoordinateUpdate', data);
   });
 
