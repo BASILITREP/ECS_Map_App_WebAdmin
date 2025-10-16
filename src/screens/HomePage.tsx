@@ -3,9 +3,7 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import Header from "../header/Header";
 import Sidebar from "../screens/HomePage/Sidebar";
-import MapFilters from "../screens/HomePage/MapFilters";
-import OngoingRoutesPanel from "../screens/HomePage/OngoingRoutes";
-import ServiceRequests from "../screens/HomePage/ServiceRequest";
+
 
 
 import type {
@@ -16,9 +14,9 @@ import type {
   ActivityHistory,
 } from "../types";
 import { toast } from "react-toastify";
-import history from "../assets/History.png";
+
 import {
-  startFieldEngineerNavigation,
+
   stopFieldEngineerNavigation,
 } from "../services/api";
 
@@ -35,6 +33,9 @@ import {
   subscribe,
   unsubscribe,
 } from "../services/socketService";
+
+// SET THE ACCESS TOKEN HERE, AT THE TOP LEVEL
+mapboxgl.accessToken = "pk.eyJ1IjoiYmFzaWwxLTIzIiwiYSI6ImNtZWFvNW43ZTA0ejQycHBtd3dkMHJ1bnkifQ.Y-IlM-vQAlaGr7pVQnug3Q";
 
 // Define the RouteStep interface
 interface RouteStep {
@@ -63,6 +64,8 @@ function HomePage() {
   const [showMapFilter, setShowMapFilter] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false); // Add sidebar state
   const [searchQuery, setSearchQuery] = useState<string>(""); // Add search state
+  const [selectedFEForHistory, setSelectedFEForHistory] = useState<FieldEngineer | null>(null);
+  const [historyPanelCollapsed, setHistoryPanelCollapsed] = useState<boolean>(false);
   const srLayers = useRef<Set<string>>(new Set());
   const routeLayerId = "active-route-layer";
 
@@ -109,55 +112,40 @@ function HomePage() {
     };
   };
 
-  const sampleLocationHistory = [
-    {
-      id: 1,
-      feId: 1, // Make sure this ID matches an existing FE
-      type: "Stop",
-      locationName: "Jollibee Anabu",
-      address: "Anabu Kostal, Imus, Cavite",
-      arrivalTime: "02:30 PM",
-      duration: "45 mins",
-    },
-    {
-      id: 2,
-      feId: 1,
-      type: "Moving",
-      locationName: "Driving along Aguinaldo Hwy",
-      address: "Near Lumina Point Mall",
-      arrivalTime: "02:15 PM",
-      duration: "15 mins",
-    },
-    {
-      id: 3,
-      feId: 1,
-      type: "Stop",
-      locationName: "Petron Gas Station",
-      address: "Centennial Rd, Kawit",
-      arrivalTime: "01:55 PM",
-      duration: "20 mins",
-    },
-    {
-      id: 4,
-      feId: 2, // History for a different FE
-      type: "Stop",
-      locationName: "SM City Bacoor",
-      address: "Tirona Hwy, Bacoor, Cavite",
-      arrivalTime: "03:10 PM",
-      duration: "35 mins",
-    },
-  ];
+  
+  // Handle field engineer selection from sidebar
+  const handleFieldEngineerSelect = (fe: FieldEngineer | null) => {
+    if (fe && map.current) {
+      // Fly to the selected field engineer's location
+      map.current.flyTo({
+        center: [fe.lng, fe.lat],
+        zoom: 16,
+        duration: 2000,
+      });
+
+      // Open the marker's popup if it exists
+      if (markers.current[fe.id]) {
+        markers.current[fe.id].togglePopup();
+      }
+    }
+    
+    // Set the selected FE for history panel
+    setSelectedFEForHistory(fe);
+    if (fe) {
+      setHistoryPanelCollapsed(false); // Expand panel when selecting new FE
+    }
+  };
 
   // Fetch field engineers from API
   const fetchFieldEngineersData = async () => {
     try {
       const data = await fetchFieldEngineers();
       setFieldEngineers(data);
-      setLoading(false);
+      // setLoading(false); // REMOVED: This is the cause of the race condition.
     } catch (err) {
       console.error("Error fetching field engineers:", err);
       setError("Failed to fetch field engineers data.");
-      setLoading(false);
+      // setLoading(false); // REMOVED
     }
   };
 
@@ -166,11 +154,11 @@ function HomePage() {
     try {
       const data = await fetchBranches();
       setBranches(data);
-      setLoading(false);
+      // setLoading(false); // REMOVED: This is the cause of the race condition.
     } catch (err) {
       console.error("Error fetching branches:", err);
       setError("Failed to fetch branches data.");
-      setLoading(false);
+      // setLoading(false); // REMOVED
     }
   };
 
@@ -710,8 +698,9 @@ function HomePage() {
   }, []);
 
   useEffect(() => {
-    mapboxgl.accessToken =
-      "pk.eyJ1IjoiYmFzaWwxLTIzIiwiYSI6ImNtZWFvNW43ZTA0ejQycHBtd3dkMHJ1bnkifQ.Y-IlM-vQAlaGr7pVQnug3Q";
+    // REMOVE THE TOKEN ASSIGNMENT FROM HERE
+    // mapboxgl.accessToken =
+    //   "pk.eyJ1IjoiYmFzaWwxLTIzIiwiYSI6ImNtZWFvNW43ZTA0ejQycHBtd3dkMHJ1bnkifQ.Y-IlM-vQAlaGr7pVQnug3Q";
 
     if (mapContainer.current && !map.current) {
       map.current = new mapboxgl.Map({
@@ -741,9 +730,11 @@ function HomePage() {
           document.head.appendChild(style);
         }
 
-        fetchFieldEngineersData();
-        fetchBranchesData();
-        fetchServiceRequestsData();
+        // DO NOT FETCH DATA HERE. This is causing a race condition.
+        // The main useEffect at the bottom of the file handles all initial fetching.
+        // fetchFieldEngineersData();
+        // fetchBranchesData();
+        // fetchServiceRequestsData();
       });
     }
 
@@ -1201,299 +1192,427 @@ function HomePage() {
 
   // Initial data fetch on component mount
   useEffect(() => {
-    // Still keep initial fetch to populate data when the page loads
-    fetchFieldEngineersData();
-    fetchBranchesData();
-    fetchServiceRequestsData();
+    const fetchAllInitialData = async () => {
+      setLoading(true); // Set loading to true at the very beginning.
+      try {
+        // Promise.all waits for all fetches to complete.
+        await Promise.all([
+          fetchFieldEngineersData(),
+          fetchBranchesData(),
+          fetchServiceRequestsData(),
+        ]);
+      } catch (error) {
+        console.error("Error during initial data fetch:", error);
+        setError("Failed to load initial application data.");
+      } finally {
+        // This will only run after ALL fetches are done.
+        setLoading(false);
+      }
+    };
 
-    // Remove polling intervals since we're using sockets now
-    // (The old polling code can be removed)
+    fetchAllInitialData();
   }, []);
 
   const ActivityMapCard = ({ lat, lng }: { lat: number; lng: number }) => {
-    const mapContainerRef = useRef<HTMLDivElement>(null);
-    const mapRef = useRef<mapboxgl.Map | null>(null);
-
-    useEffect(() => {
-      if (mapRef.current || !mapContainerRef.current) return; // Initialize map only once
-
-      mapboxgl.accessToken =
-        "pk.eyJ1IjoiYmFzaWwxLTIzIiwiYSI6ImNtZWFvNW43ZTA0ejQycHBtd3dkMHJ1bnkifQ.Y-IlM-vQAlaGr7pVQnug3Q";
-
-      const map = new mapboxgl.Map({
-        container: mapContainerRef.current,
-        style: "mapbox://styles/mapbox/streets-v12",
-        center: [lng, lat],
-        zoom: 15,
-        interactive: false, // IMPORTANT: Disable interaction for performance
-      });
-
-      mapRef.current = map;
-
-      map.on("load", () => {
-        // Add a marker to the center
-        new mapboxgl.Marker().setLngLat([lng, lat]).addTo(map);
-      });
-
-      // Cleanup function to remove map on component unmount
-      return () => {
-        map.remove();
-        mapRef.current = null;
-      };
-    }, [lat, lng]); 
+    // Use Mapbox Static Image API instead of creating a full map
+    // FIX: Correctly format the URL to use 'auto' for the viewport.
+    const staticMapUrl = `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/pin-s+ff4136(${lng},${lat})/auto/300x150@2x?padding=50&access_token=${mapboxgl.accessToken}`;
 
     return (
-      <div ref={mapContainerRef} className="mt-3 rounded-lg w-full h-24" />
+      <img
+        src={staticMapUrl}
+        alt="Location"
+        className="mt-3 rounded-lg w-full h-24 object-cover"
+        loading="lazy"
+      />
+    );
+  };
+
+  const ActivityDriveMapCard = ({
+    startLat,
+    startLng,
+    endLat,
+    endLng,
+  }: {
+    startLat: number;
+    startLng: number;
+    endLat: number;
+    endLng: number;
+  }) => {
+    // Check if the drive is essentially zero distance
+    if (startLat === endLat && startLng === endLng) {
+      // If start and end are the same, just show a single marker like in ActivityMapCard
+      return <ActivityMapCard lat={startLat} lng={startLng} />;
+    }
+
+    // Define markers for start (green 'A') and end (red 'B')
+    const startMarker = `pin-s-a+4CAF50(${startLng},${startLat})`;
+    const endMarker = `pin-s-b+F44336(${endLng},${endLat})`;
+
+    // CORRECTLY format the coordinates as a GeoJSON LineString
+    const geojson = {
+      type: "LineString",
+      coordinates: [
+        [startLng, startLat],
+        [endLng, endLat],
+      ],
+    };
+
+    // URL-encode the GeoJSON object to be used in the path parameter
+    const encodedPath = encodeURIComponent(JSON.stringify(geojson));
+
+    // Define the path overlay with the correctly encoded GeoJSON
+    // FIX: The parentheses around the encoded path are required by the API.
+    const path = `path-5+3887BE-0.8(${encodedPath})`;
+
+    // Construct the final URL. 'auto' will now correctly fit the bounds of the path and markers.
+    const staticMapUrl = `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${startMarker},${endMarker},${path}/auto/300x150@2x?padding=50&access_token=${mapboxgl.accessToken}`;
+
+    return (
+      <img
+        src={staticMapUrl}
+        alt="Route map"
+        className="mt-2 rounded-lg w-full h-20 object-cover"
+        loading="lazy"
+      />
     );
   };
 
   const LocationHistoryPanel = ({
-    fieldEngineers,
+    selectedEngineer,
+    onClose,
   }: {
-    fieldEngineers: FieldEngineer[];
+    selectedEngineer: FieldEngineer;
+    onClose: () => void;
   }) => {
-    const [selectedFeId, setSelectedFeId] = useState(
-      fieldEngineers[0]?.id || 0
-    );
     const [historyData, setHistoryData] = useState<ActivityHistory[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [localCollapsed, setLocalCollapsed] = useState<boolean>(false);
     const scrollContainerRef = useRef<HTMLDivElement>(null);
 
     // This useEffect will run whenever the selected engineer changes
     useEffect(() => {
-      if (selectedFeId > 0) {
-        const loadHistory = async () => {
-          setIsLoading(true);
-          try {
-            const data = await fetchActivityHistory(selectedFeId);
-            setHistoryData(data);
-          } catch (error) {
-            console.error("Failed to fetch activity history:", error);
-            setHistoryData([]); // Clear data on error
-          } finally {
-            setIsLoading(false);
-          }
-        };
-        loadHistory();
-      }
-    }, [selectedFeId]); // Re-run when selectedFeId changes
+      const loadHistory = async () => {
+        setIsLoading(true);
+        try {
+          const data = await fetchActivityHistory(selectedEngineer.id);
+          setHistoryData(data || []); // Simplified
+        } catch (error) {
+          console.error("Failed to fetch activity history:", error);
+          setHistoryData([]);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+      loadHistory();
+    }, [selectedEngineer]); // FIX: Change dependency from selectedEngineer.id to the whole object
 
     // Function to handle horizontal scrolling with mouse wheel
     const handleWheelScroll = (e: React.WheelEvent) => {
       if (scrollContainerRef.current) {
+        e.preventDefault();
         scrollContainerRef.current.scrollLeft += e.deltaY;
       }
     };
 
     return (
-      <div className="bg-[#6b6f1d]/90 backdrop-blur-sm shadow-md rounded-xl p-4">
+      <div className="bg-[#6b6f1d]/95 backdrop-blur-md shadow-2xl rounded-t-2xl border-t-2 border-white/20">
         {/* Header */}
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-white font-medium">
-            Field Engineer Activity Log
-          </h3>
-          <select
-            className="select select-sm bg-white/20 text-white border-white/30"
-            value={selectedFeId}
-            onChange={(e) => setSelectedFeId(Number(e.target.value))}
-          >
-            {fieldEngineers.map((fe) => (
-              <option key={fe.id} value={fe.id} className="text-black">
-                {fe.name}
-              </option>
-            ))}
-          </select>
+        <div className="flex justify-between items-center p-3 border-b border-white/20">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-white font-bold">
+              {selectedEngineer.name.charAt(0).toUpperCase()}
+            </div>
+            <div>
+              <h3 className="text-white font-semibold text-sm">
+                {selectedEngineer.name} - Activity Log
+              </h3>
+              <p className="text-white/70 text-xs">
+                {selectedEngineer.status}
+              </p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setLocalCollapsed(!localCollapsed)}
+              className="btn btn-sm btn-circle bg-white/10 hover:bg-white/20 border-none text-white"
+              title={localCollapsed ? "Expand" : "Collapse"}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2}
+                stroke="currentColor"
+                className={`w-4 h-4 transition-transform duration-300 ${
+                  localCollapsed ? "rotate-180" : ""
+                }`}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M19.5 8.25l-7.5 7.5-7.5-7.5"
+                />
+              </svg>
+            </button>
+            <button
+              onClick={onClose}
+              className="btn btn-sm btn-circle bg-white/10 hover:bg-red-500/50 border-none text-white"
+              title="Close"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                strokeWidth={2}
+                stroke="currentColor"
+                className="w-4 h-4"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </button>
+          </div>
         </div>
 
-        {/* Horizontal Scrollable Container */}
+        {/* Collapsible Content */}
         <div
-          ref={scrollContainerRef}
-          onWheel={handleWheelScroll}
-          className="flex overflow-x-auto space-x-4 pb-4 scrollbar-thin scrollbar-thumb-white/30 scrollbar-track-transparent min-h-[220px]"
+          className={`transition-all duration-300 overflow-hidden ${
+            localCollapsed ? "max-h-0" : "max-h-[280px]"
+          }`}
         >
-          {isLoading ? (
-            <div className="flex-grow flex items-center justify-center">
-              <span className="loading loading-spinner loading-md text-white"></span>
-            </div>
-          ) : historyData.length === 0 ? (
-            <div className="flex-grow flex items-center justify-center bg-white/10 rounded-lg p-4 text-center text-white/70">
-              No activity data available for this engineer.
-            </div>
-          ) : (
-            historyData.map((item) => (
-              // The card rendering logic is the same as before
-              <div
-                key={item.id}
-                className="bg-black/20 p-3 rounded-lg w-80 flex-shrink-0"
-              >
-                {/* ... The rest of your card UI from the previous step ... */}
-                {/* Card Header */}
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center ${
-                      item.type === "drive"
-                        ? "bg-blue-500/80"
-                        : "bg-orange-500/80"
-                    }`}
-                  >
-                    {/* ... SVG Icons ... */}
-                  </div>
-                  <div>
-                    <div className="font-bold text-white text-lg">
-                      {item.type === "drive"
-                        ? `${item.distance} Drive`
-                        : item.locationName}
-                    </div>
-                    <div className="text-xs text-white/70">
-                      {item.timeRange} ({item.duration})
-                    </div>
-                  </div>
-                </div>
-
-                {/* Conditional Map/Image Display */}
-                {item.type === "stop" && item.lat && item.lng ? (
-                  <ActivityMapCard lat={item.lat} lng={item.lng} />
-                ) : (
-                  <img
-                    src={item.mapImage}
-                    alt="Map of the route"
-                    className="mt-3 rounded-lg w-full h-24 object-cover"
-                  />
-                )}
-
-                {/* Drive Details */}
-                {item.type === "drive" && (
-                  <div className="grid grid-cols-2 gap-2 mt-3 text-xs text-white">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-red-400">🚗</span> Top speed:{" "}
-                      <strong>{item.topSpeed}</strong>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-green-400">✓</span> Crash Detection:{" "}
-                      <strong>ON</strong>
-                    </div>
-                    {/* <div className="flex items-center gap-1.5 col-span-2">
-                    <span className="text-yellow-400">⚠️</span> Risky events: <strong>{item.riskyEvents > 0 ? `${item.riskyEvents} event(s)` : 'None'}</strong>
-                  </div> */}
-                  </div>
-                )}
+          {/* Horizontal Scrollable Container */}
+          <div
+            ref={scrollContainerRef}
+            onWheel={handleWheelScroll}
+            className="flex overflow-x-auto space-x-4 p-4 scrollbar-thin scrollbar-thumb-white/30 scrollbar-track-transparent min-h-[240px]"
+          >
+            {isLoading ? (
+              <div className="flex-grow flex flex-col items-center justify-center">
+                <span className="loading loading-spinner loading-lg text-white mb-2"></span>
+                <p className="text-white/70 text-sm">Loading activities...</p>
               </div>
-            ))
-          )}
+            ) : historyData.length === 0 ? (
+              <div className="flex-grow flex items-center justify-center bg-white/10 rounded-lg p-4 text-center text-white/70">
+                <div>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    strokeWidth={1.5}
+                    stroke="currentColor"
+                    className="w-12 h-12 mx-auto mb-2 opacity-50"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z"
+                    />
+                  </svg>
+                  <p className="font-semibold">No activity data available</p>
+                  <p className="text-xs mt-1">This engineer hasn't logged any activities yet.</p>
+                </div>
+              </div>
+            ) : (
+              historyData.map((item) => (
+                <div
+                  key={item.id}
+                  className="bg-black/30 p-3 rounded-lg w-72 flex-shrink-0 border border-white/10"
+                >
+                  {/* Card Header */}
+                  <div className="flex items-center gap-3 mb-2">
+                    <div
+                      className={`w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center ${
+                        item.type === "drive"
+                          ? "bg-blue-500/80"
+                          : "bg-orange-500/80"
+                      }`}
+                    >
+                      {item.type === "drive" ? (
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          strokeWidth={2}
+                          stroke="currentColor"
+                          className="w-6 h-6 text-white"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M8.25 18.75a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 01-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 00-3.213-9.193 2.056 2.056 0 00-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 00-10.026 0 1.106 1.106 0 00-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12"
+                          />
+                        </svg>
+                      ) : (
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          strokeWidth={2}
+                          stroke="currentColor"
+                          className="w-6 h-6 text-white"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"
+                          />
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"
+                          />
+                        </svg>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-white text-sm">
+                        {item.type === "drive"
+                          ? `${item.distance} Drive`
+                          : item.locationName}
+                      </div>
+                      <div className="text-xs text-white/70">
+                        {item.timeRange} ({item.duration})
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Conditional Map/Image Display */}
+                  {item.type === "stop" && item.lat && item.lng ? (
+                    <ActivityMapCard lat={item.lat} lng={item.lng} />
+                  ) : item.type === "drive" &&
+                    item.startLat &&
+                    item.startLng &&
+                    item.endLat &&
+                    item.endLng ? (
+                    <ActivityDriveMapCard
+                      startLat={item.startLat}
+                      startLng={item.startLng}
+                      endLat={item.endLat}
+                      endLng={item.endLng}
+                    />
+                  ) : (
+                    <img
+                      src={item.mapImage}
+                      alt="Map of the route"
+                      className="mt-2 rounded-lg w-full h-20 object-cover"
+                    />
+                  )}
+
+                  {/* Drive Details */}
+                  {item.type === "drive" && (
+                    <div className="mt-2 space-y-1.5 text-xs text-white/80">
+                      <div className="flex items-start gap-2">
+                        <span className="text-green-400 mt-0.5">●</span>
+                        <div className="flex-1 truncate">
+                          <strong>From:</strong> {item.startAddress}
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="text-red-400 mt-0.5">●</span>
+                        <div className="flex-1 truncate">
+                          <strong>To:</strong> {item.endAddress}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 pt-1 text-[10px] text-white">
+                        <div className="flex items-center gap-1">
+                          <span className="text-red-400">🚗</span> Top speed:{" "}
+                          <strong>{item.topSpeed}</strong>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-green-400">✓</span> Safe Drive
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
     );
   };
 
   //Main return
-  // Add a small connection indicator in your UI
   return (
-    <div className="h-screen flex overflow-hidden bg-[#c8c87e]">
-      {/* Main content */}
-      <main
-        className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ${
-          sidebarCollapsed ? "lg:mr-12" : "lg:mr-80"
-        }`}
-      >
-        {/* Header */}
-        <Header activePage="dashboard" />
-
-        {/* Connection status indicator */}
-        <div
-          className={`fixed top-4 z-50 px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1 transition-all duration-300 ${
-            sidebarCollapsed ? "right-16" : "right-4"
-          } ${socketConnected ? "bg-green-500/80" : "bg-red-500/80"}`}
-        >
-          <div
-            className={`w-2 h-2 rounded-full ${
-              socketConnected ? "bg-green-200 animate-pulse" : "bg-red-200"
-            }`}
-          ></div>
-          <span className="text-white">
-            {socketConnected ? "Live" : "Offline"}
-          </span>
-        </div>
-
-        {/* Main content area with proper spacing */}
-        <div className="flex-1 overflow-y-auto relative">
-          {/* Map Container - Full width */}
-          <div className="relative">
-            <MapFilters
-            branches={branches}
-            fieldEngineers={fieldEngineers}
-            sidebarCollapsed={sidebarCollapsed}
-            showBranches={showBranches}
-            showFieldEngineers={showFieldEngineers}
-            statusFilter={statusFilter}
-            showMapFilter={showMapFilter}
-            setShowBranches={setShowBranches}
-            setShowFieldEngineers={setShowFieldEngineers}
-            setStatusFilter={setStatusFilter}
-            setShowMapFilter={setShowMapFilter}
-          />
-
-            {/* Map */}
-            <div
-              ref={mapContainer}
-              className="w-full h-[400px] lg:h-[500px] bg-base-200"
-            />
-
-            {loading && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/20 z-20">
-                <span className="loading loading-spinner loading-lg text-primary"></span>
-              </div>
-            )}
-            {error && (
-              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20">
-                <div className="alert alert-error">
-                  <span>{error}</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Content below map */}
-          <div className="p-4 space-y-4">
-            
-            {/* Ongoing Routes panel */}
-            <OngoingRoutesPanel
-            ongoingRoutes={ongoingRoutes}
-            selectedRoute={selectedRoute}
-            showRouteOnMap={showRouteOnMap}
-            loading={loading}
-            handleShowRoute={handleShowRoute}
-            clearRouteFromMap={clearRouteFromMap}
-            handleStopNavigation={handleStopNavigation}
-          />
-          </div>
-
-          <LocationHistoryPanel fieldEngineers={fieldEngineers} />
-
-          {/* Service requests card */}
-           {/* <ServiceRequests
-            serviceRequests={serviceRequests}
-            fieldEngineers={fieldEngineers}
-            ongoingRoutes={ongoingRoutes}
-            branches={branches}
-            handleAcceptServiceRequest={handleAcceptServiceRequest}
-          /> */}
-
-          <div className="overflow-x-auto"></div>
-        </div>
-      </main>
-
-     {/* Render the Sidebar and pass down the props */}
-      <Sidebar
-        branches={branches}
-        serviceRequests={serviceRequests}
-        ongoingRoutes={ongoingRoutes}
-        loading={loading}
-        error={error}
-        handleCreateServiceRequest={handleCreateServiceRequest}
-        fetchBranchesData={fetchBranchesData}
+    <div className="h-screen flex overflow-hidden relative">
+      {/* Full-screen Map Background */}
+      <div
+        ref={mapContainer}
+        className="absolute inset-0 w-full h-full bg-base-200 z-0"
       />
 
-      
+      {/* Overlay for loading/error states */}
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/20 z-50">
+          <span className="loading loading-spinner loading-lg text-primary"></span>
+        </div>
+      )}
+      {error && (
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50">
+          <div className="alert alert-error">
+            <span>{error}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Header - Adjusts based on sidebar */}
+      <div className={`absolute top-0 left-0 transition-all duration-300 z-40 ${
+        sidebarCollapsed ? 'right-10' : 'right-[320px]'
+      }`}>
+        <Header activePage="dashboard" />
+      </div>
+
+      {/* Connection status indicator */}
+      <div
+        className={`fixed bottom-1 right-1 z-50 px-2 py-1 rounded-full text-xs font-medium flex items-center gap-1 ${
+          socketConnected ? "bg-green-500/80" : "bg-red-500/80"
+        } backdrop-blur-sm shadow-lg`}
+      >
+        <div
+          className={`w-2 h-2 rounded-full ${
+            socketConnected ? "bg-green-200 animate-pulse" : "bg-red-200"
+          }`}
+        ></div>
+        <span className="text-white">
+          {socketConnected ? "Live" : "Offline"}
+        </span>
+      </div>
+
+      {/* Floating Activity Log Panel - Bottom (only when FE is selected) */}
+      {selectedFEForHistory && (
+        <div className={`fixed bottom-0 left-1/2 transform -translate-x-1/2 z-30 transition-all duration-300 ${
+          sidebarCollapsed ? 'w-[calc(100%-80px)]' : 'w-[calc(100%-400px)]'
+        } max-w-6xl`}>
+          <LocationHistoryPanel 
+            selectedEngineer={selectedFEForHistory}
+            onClose={() => setSelectedFEForHistory(null)}
+          />
+        </div>
+      )}
+
+      {/* Floating Sidebar - Right side */}
+      <div className="absolute top-0 right-0 bottom-0 z-40 h-full">
+        <Sidebar
+          branches={branches}
+          serviceRequests={serviceRequests}
+          ongoingRoutes={ongoingRoutes}
+          fieldEngineers={fieldEngineers}
+          loading={loading}
+          error={error}
+          handleCreateServiceRequest={handleCreateServiceRequest}
+          fetchBranchesData={fetchBranchesData}
+          onCollapseChange={setSidebarCollapsed}
+          onFieldEngineerSelect={handleFieldEngineerSelect}
+          ActivityMapCard={ActivityMapCard}
+          ActivityDriveMapCard={ActivityDriveMapCard}
+        />
+      </div>
     </div>
   );
 }

@@ -66,4 +66,14 @@ export interface ActivityHistory {
   mapImage: string;
   lat?: number;
   lng?: number;
+  startLat?: number;
+  startLng?: number;
+  startAddress?: string;
+  endLat?: number;
+  endLng?: number;
+  endAddress?: string;
+  startTime: string;
+  endTime: string;
+  distanceKm?: number;
+  topSpeedKmh?: number;
 }

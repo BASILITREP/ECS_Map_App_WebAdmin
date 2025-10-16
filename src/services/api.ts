@@ -1,5 +1,5 @@
 import type { Branch, FieldEngineer, ServiceRequest, ActivityHistory } from '../types';
-import image from '../assets/History.png';
+import image from '../assets/windowsyarn.jpg';
 import { isConnected } from './socketService';
 
 // Use environment variable for API URL with fallback
@@ -185,8 +185,11 @@ export const stopFieldEngineerNavigation = async (fieldEngineerId: number) => {
 };
 
 export const fetchActivityHistory = async (fieldEngineerId: number): Promise<ActivityHistory[]> => {
+
   const response = await fetch(`${API_URL}/FieldEngineer/${fieldEngineerId}/activity`);
+ 
   const data = await handleResponse(response);
+ 
   
   // Transform the backend data to match the frontend component's expected structure
   return data.map((event: any) => {
@@ -203,7 +206,13 @@ export const fetchActivityHistory = async (fieldEngineerId: number): Promise<Act
         duration: `${event.durationMinutes} min`,
         topSpeed: `${event.topSpeedKmh.toFixed(0)} km/h`,
         riskyEvents: 0, // Placeholder
-        mapImage: image,
+        mapImage: image, // This will be replaced by the map component
+        startLat: event.startLatitude,
+        startLng: event.startLongitude,
+        startAddress: event.startAddress,
+        endLat: event.endLatitude,
+        endLng: event.endLongitude,
+        endAddress: event.endAddress,
       };
     } else { // 0 corresponds to the 'Stop' enum
       return {
